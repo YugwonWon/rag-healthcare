@@ -1,0 +1,49 @@
+{
+    // Python 설정
+    "python.defaultInterpreterPath": "${workspaceFolder}/venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    // 분석 설정
+    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}"
+    ],
+    // 포맷터 설정
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "ms-python.python",
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.python",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    },
+    // 테스트 설정
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [
+        "app/test"
+    ],
+    // 파일 제외
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        ".pytest_cache": true,
+        "*.egg-info": true
+    },
+    // 검색 제외
+    "search.exclude": {
+        "**/venv": true,
+        "**/data/chroma": true,
+        "**/__pycache__": true
+    },
+    // 터미널 설정
+    "terminal.integrated.env.linux": {
+        "PYTHONPATH": "${workspaceFolder}"
+    },
+    // FastAPI 관련
+    "rest-client.environmentVariables": {
+        "local": {
+            "host": "http://localhost:8000"
+        }
+    }
+}

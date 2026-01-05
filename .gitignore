@@ -1,7 +1,13 @@
+data/chroma
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
+
+# Logs
+logs/
+*.log
 
 # C extensions
 *.so
@@ -205,3 +211,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+*.log
