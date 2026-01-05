@@ -1,0 +1,4 @@
+# HuggingFace Spaces용 의존성
+
+gradio>=4.19.0
+httpx>=0.27.0
