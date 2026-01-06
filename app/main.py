@@ -241,6 +241,7 @@ async def chat(
         )
     
     except Exception as e:
+        logger.error(f"채팅 처리 중 오류: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"채팅 처리 중 오류: {str(e)}")
 
 
@@ -265,6 +266,7 @@ async def get_greeting(
         )
     
     except Exception as e:
+        logger.error(f"인사말 생성 중 오류: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"인사말 생성 중 오류: {str(e)}")
 
 
