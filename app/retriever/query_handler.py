@@ -5,12 +5,13 @@ RAG 쿼리 핸들러
 NER(개체명 인식)과 N-gram 기반 건강 위험 신호 감지 전처리 포함
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 from app.config import settings, prompts
 from app.model import get_llm
 from app.vector_store import get_chroma_handler
+from app.utils import get_kst_now, get_kst_datetime_str
 from app.preprocessing import (
     HealthSignalDetector,
     KoreanNERProcessor,
@@ -94,8 +95,12 @@ class RAGQueryHandler:
         # 4. 건강 위험 신호 컨텍스트 추가
         health_context = self._format_health_analysis(health_analysis)
         
+        # 현재 한국 시간 가져오기
+        current_time = get_kst_datetime_str()
+        
         # 5. 프롬프트 구성 (건강 분석 결과 포함)
         system_prompt = prompts.SYSTEM_PROMPT.format(
+            current_time=current_time,
             patient_info=patient_info,
             conversation_history=conversation_history,
             retrieved_context=retrieved_context
@@ -191,9 +196,10 @@ class RAGQueryHandler:
         Returns:
             개인화된 인사말
         """
-        # 현재 시간 확인
-        now = datetime.now()
+        # 현재 한국 시간 확인
+        now = get_kst_now()
         hour = now.hour
+        self._logger.info(f"현재 한국 시간: {now.strftime('%Y-%m-%d %H:%M:%S KST')}")
         
         if 5 <= hour < 12:
             time_of_day = "아침"

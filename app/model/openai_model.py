@@ -61,6 +61,6 @@ class OpenAIModel(BaseLLM):
         
         return response.choices[0].message.content
     
-    def is_available(self) -> bool:
+    async def is_available(self) -> bool:
         """모델 사용 가능 여부"""
         return self._client is not None and self.api_key is not None
