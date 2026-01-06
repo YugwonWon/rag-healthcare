@@ -338,6 +338,28 @@ async def get_conversation_history(
     }
 
 
+@app.delete("/history/{nickname}")
+async def delete_conversation_history(
+    nickname: str,
+    chroma=Depends(get_chroma)
+):
+    """
+    사용자의 대화 기록 삭제
+    """
+    try:
+        deleted_count = chroma.delete_user_conversations(nickname)
+        logger.info(f"대화 기록 삭제 | nickname={nickname} | count={deleted_count}")
+        return {
+            "success": True,
+            "nickname": nickname,
+            "deleted_count": deleted_count,
+            "message": f"{nickname}님의 대화 기록 {deleted_count}개가 삭제되었습니다."
+        }
+    except Exception as e:
+        logger.error(f"대화 기록 삭제 실패 | nickname={nickname} | error={e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/documents")
 async def add_documents(request: DocumentRequest, chroma=Depends(get_chroma)):
     """

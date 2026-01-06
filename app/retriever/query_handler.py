@@ -82,13 +82,13 @@ class RAGQueryHandler:
         retrieved_context = self._format_retrieved_context(doc_results)
         logger.debug(f"문서 검색 완료 | 결과 수={len(doc_results.get('documents', [[]])[0])}")
         
-        # 3. 대화 기록 조회 (개인화)
+        # 3. 대화 기록 조회 (개인화) - 최근 3개로 제한하여 응답 속도 개선
         conversation_history = ""
         if include_history:
             conv_results = self._chroma.get_user_conversations(
                 nickname=nickname,
                 query=query,
-                n_results=5
+                n_results=3
             )
             conversation_history = self._format_conversation_history(conv_results)
         
@@ -280,8 +280,9 @@ class RAGQueryHandler:
         documents = results["documents"][0] if results["documents"] else []
         
         context_parts = []
-        for i, doc in enumerate(documents[:settings.RAG_TOP_K], 1):
-            context_parts.append(f"[{i}] {doc[:500]}...")
+        # 컨텍스트 길이 최적화: 각 문서 300자로 제한 (LLM 응답 속도 개선)
+        for i, doc in enumerate(documents[:3], 1):  # 최대 3개 문서만 사용
+            context_parts.append(f"[{i}] {doc[:300]}")
         
         return "\n\n".join(context_parts)
     
@@ -299,8 +300,9 @@ class RAGQueryHandler:
             return "이전 대화 없음"
         
         history_parts = []
-        for doc in documents[:5]:
-            history_parts.append(doc)
+        for doc in documents[:3]:  # 최근 3개 대화만 포함 (응답 속도 최적화)
+            # 각 대화도 200자로 제한
+            history_parts.append(doc[:200] if len(doc) > 200 else doc)
         
         return "\n---\n".join(history_parts)
 

@@ -15,6 +15,9 @@ from .model_factory import BaseLLM
 
 logger = get_logger(__name__)
 
+# Cloud Run CPU 환경에서 LLM 응답 시간 고려 (최대 5분)
+OLLAMA_TIMEOUT = 300.0
+
 
 class OllamaClient:
     """Ollama API 클라이언트"""
@@ -27,7 +30,7 @@ class OllamaClient:
     async def _get_client(self) -> httpx.AsyncClient:
         """HTTP 클라이언트 가져오기"""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=120.0)
+            self._client = httpx.AsyncClient(timeout=OLLAMA_TIMEOUT)
         return self._client
     
     async def generate(
@@ -98,13 +101,21 @@ class OllamaClient:
             }
         }
         
-        response = await client.post(
-            f"{self.base_url}/api/chat",
-            json=payload
-        )
-        response.raise_for_status()
+        try:
+            response = await client.post(
+                f"{self.base_url}/api/chat",
+                json=payload
+            )
+            response.raise_for_status()
+            return response.json()["message"]["content"]
         
-        return response.json()["message"]["content"]
+        except httpx.TimeoutException:
+            logger.error(f"Ollama 타임아웃 ({OLLAMA_TIMEOUT}초 초과)")
+            return "죄송합니다, 응답 생성에 시간이 오래 걸리고 있어요. 잠시 후 다시 말씀해 주세요. 🙏"
+        
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama HTTP 에러: {e}")
+            return "죄송합니다, 일시적인 오류가 발생했어요. 다시 말씀해 주세요. 🙏"
     
     async def is_available(self) -> bool:
         """Ollama 서버 사용 가능 여부 확인"""

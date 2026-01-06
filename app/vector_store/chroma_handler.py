@@ -211,6 +211,32 @@ class ChromaHandler:
         
         return results
     
+    def delete_user_conversations(self, nickname: str) -> int:
+        """
+        사용자의 모든 대화 기록 삭제
+        
+        Args:
+            nickname: 사용자 닉네임
+        
+        Returns:
+            삭제된 대화 기록 수
+        """
+        # 먼저 해당 사용자의 대화 기록 조회
+        results = self._conversations_collection.get(
+            where={"nickname": nickname}
+        )
+        
+        if not results or not results.get("ids"):
+            return 0
+        
+        ids_to_delete = results["ids"]
+        deleted_count = len(ids_to_delete)
+        
+        # 대화 기록 삭제
+        self._conversations_collection.delete(ids=ids_to_delete)
+        
+        return deleted_count
+    
     def get_recent_activities(self, nickname: str, hours: int = 24) -> list[dict]:
         """
         최근 활동 내역 조회 (개인화된 인사말 생성용)

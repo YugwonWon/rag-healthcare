@@ -29,10 +29,13 @@ user_sessions = {}
 
 print(f"🔗 Backend URL: {BACKEND_URL}")
 
+# Cloud Run 콜드 스타트 + LLM 응답 시간 고려 (최대 180초)
+API_TIMEOUT = 180.0
+
 
 async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = None) -> dict:
     """백엔드 API 호출"""
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
         url = f"{BACKEND_URL}{endpoint}"
         
         try:
@@ -44,6 +47,10 @@ async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = No
             
             response.raise_for_status()
             return response.json()
+        
+        except httpx.TimeoutException:
+            print(f"⏰ API 타임아웃: {url}")
+            return {"error": "서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."}
         
         except httpx.HTTPError as e:
             print(f"❌ API 에러: {e}")
@@ -68,6 +75,26 @@ async def check_backend_status() -> str:
     except Exception as e:
         print(f"❌ 상태 확인 에러: {e}")
         return "🔴 서버 연결 실패"
+
+
+async def delete_conversation_history(nickname: str) -> str:
+    """대화 기록 삭제"""
+    if not nickname.strip():
+        return "❌ 닉네임을 먼저 입력해주세요."
+    
+    # DELETE 메서드 호출
+    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+        try:
+            url = f"{BACKEND_URL}/history/{nickname}"
+            response = await client.delete(url)
+            response.raise_for_status()
+            result = response.json()
+            
+            deleted_count = result.get("deleted_count", 0)
+            return f"✅ {nickname}님의 대화 기록 {deleted_count}개가 삭제되었습니다."
+        except httpx.HTTPError as e:
+            print(f"❌ 대화 기록 삭제 에러: {e}")
+            return f"❌ 삭제 실패: {str(e)}"
 
 
 async def get_greeting(nickname: str) -> str:
@@ -255,6 +282,14 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             )
             refresh_status_btn = gr.Button("🔄 새로고침", size="sm")
     
+    gr.Markdown(
+        """
+        > ⏳ **안내**: 서버 절전 모드로 인해 첫 응답에 **1~2분** 정도 소요될 수 있습니다. 
+        > 이후 대화는 빠르게 진행됩니다. 잠시만 기다려주세요! 🙏
+        """,
+        elem_classes=["info-box"]
+    )
+    
     with gr.Row():
         with gr.Column(scale=3):
             nickname_input = gr.Textbox(
@@ -317,7 +352,10 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                         lines=3
                     )
             
-            save_profile_btn = gr.Button("프로필 저장", variant="primary")
+            with gr.Row():
+                save_profile_btn = gr.Button("프로필 저장", variant="primary")
+                delete_history_btn = gr.Button("🗑️ 이전 대화 기록 삭제", variant="stop")
+            
             profile_status = gr.Markdown()
     
     # 이벤트 핸들러
@@ -414,6 +452,13 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             profile_emergency,
             profile_notes
         ],
+        outputs=[profile_status],
+        api_name=False
+    )
+    
+    delete_history_btn.click(
+        fn=delete_conversation_history,
+        inputs=[nickname_input],
         outputs=[profile_status],
         api_name=False
     )

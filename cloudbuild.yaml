@@ -1,15 +1,5 @@
-# Cloud Build 설정 파일 (Ollama 포함 Dockerfile 사용)
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: 
-      - 'build'
-      - '-t'
-      - 'gcr.io/$PROJECT_ID/healthcare-rag-chatbot:latest'
-      - '-f'
-      - 'Dockerfile.ollama'
-      - '.'
-
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/healthcare-rag-chatbot:latest', '-f', 'Dockerfile.ollama', '.']
 images:
   - 'gcr.io/$PROJECT_ID/healthcare-rag-chatbot:latest'
-
-timeout: '1800s'
