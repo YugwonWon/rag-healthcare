@@ -11,6 +11,7 @@ import json
 
 from app.config import settings, prompts
 from app.vector_store import get_chroma_handler
+from app.utils import get_kst_now
 
 
 class MedicationFrequency(Enum):
@@ -125,7 +126,7 @@ class MedicationReminder:
         Returns:
             복용 예정 약 리스트
         """
-        now = datetime.now()
+        now = get_kst_now()
         current_time = now.time()
         
         due_medications = []
@@ -187,7 +188,7 @@ class MedicationReminder:
         Returns:
             복약 기록 객체
         """
-        now = datetime.now()
+        now = get_kst_now()
         
         log = MedicationLog(
             medication_name=medication_name,
