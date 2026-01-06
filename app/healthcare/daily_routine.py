@@ -10,6 +10,7 @@ from enum import Enum
 
 from app.config import settings
 from app.vector_store import get_chroma_handler
+from app.utils import get_kst_now
 
 
 class ActivityType(Enum):
@@ -135,7 +136,7 @@ class DailyRoutineManager:
         Returns:
             현재 활동 정보 또는 None
         """
-        now = datetime.now()
+        now = get_kst_now()
         current_time = now.time()
         routine = self.get_routine(nickname)
         
@@ -165,7 +166,7 @@ class DailyRoutineManager:
         Returns:
             다음 활동 정보 또는 None
         """
-        now = datetime.now()
+        now = get_kst_now()
         current_time = now.time()
         routine = self.get_routine(nickname)
         
@@ -206,7 +207,7 @@ class DailyRoutineManager:
         Returns:
             활동 기록 객체
         """
-        now = datetime.now()
+        now = get_kst_now()
         
         log = ActivityLog(
             activity_type=activity_type,
@@ -248,7 +249,7 @@ class DailyRoutineManager:
         Returns:
             일일 요약 딕셔너리
         """
-        target_date = (date or datetime.now()).strftime("%Y-%m-%d")
+        target_date = (date or get_kst_now()).strftime("%Y-%m-%d")
         
         results = self._chroma.get_user_conversations(
             nickname=nickname,
@@ -328,7 +329,7 @@ class DailyRoutineManager:
     
     def _minutes_until(self, target_time: time) -> int:
         """지정 시간까지 남은 분 계산"""
-        now = datetime.now()
+        now = get_kst_now()
         target = datetime.combine(now.date(), target_time)
         
         if target < now:
@@ -363,7 +364,7 @@ class DailyRoutineManager:
         Returns:
             활동 제안 리스트
         """
-        now = datetime.now()
+        now = get_kst_now()
         hour = now.hour
         
         suggestions = []
