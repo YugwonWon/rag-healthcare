@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.utils import get_kst_now, get_kst_datetime_str
 from app.model import get_llm
 from app.vector_store import get_chroma_handler
 from app.retriever import get_query_handler
@@ -175,7 +176,7 @@ async def health_check(chroma=Depends(get_chroma)):
     
     # LLM 가용성 체크
     llm = get_llm()
-    llm_available = llm.is_available()
+    llm_available = await llm.is_available()
     
     return HealthStatusResponse(
         status="healthy",
@@ -232,7 +233,7 @@ async def chat(
         return ChatResponse(
             response=response,
             nickname=request.nickname,
-            timestamp=datetime.now().isoformat(),
+            timestamp=get_kst_now().isoformat(),
             symptom_alert=symptom_analysis if symptom_analysis.get("detected_symptoms") else None,
             medication_reminders=med_reminders if med_reminders else None,
             routine_status=routine_status,
@@ -259,7 +260,7 @@ async def get_greeting(
         return GreetingResponse(
             greeting=greeting,
             nickname=request.nickname,
-            timestamp=datetime.now().isoformat(),
+            timestamp=get_kst_now().isoformat(),
             suggestions=suggestions
         )
     
@@ -283,7 +284,7 @@ async def save_profile(
             "conditions": request.conditions,
             "emergency_contact": request.emergency_contact,
             "notes": request.notes,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": get_kst_now().isoformat()
         }
         
         # None 값 제거

@@ -8,12 +8,26 @@ import httpx
 import gradio as gr
 from datetime import datetime
 from typing import Optional
+from packaging import version
+
+# Gradio 버전 감지
+GRADIO_VERSION = version.parse(gr.__version__)
+IS_GRADIO_5 = GRADIO_VERSION < version.parse("6.0.0")
+IS_HUGGINGFACE = os.getenv("SPACE_ID") is not None
+
+print(f"📦 Gradio 버전: {gr.__version__} (5.x: {IS_GRADIO_5}, HF Spaces: {IS_HUGGINGFACE})")
 
 # 환경변수에서 백엔드 URL 가져오기
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
+# HuggingFace Spaces면 Cloud Run URL 사용, 로컬이면 localhost
+if IS_HUGGINGFACE:
+    BACKEND_URL = os.getenv("BACKEND_URL", "https://healthcare-rag-chatbot-894545678354.asia-northeast3.run.app")
+else:
+    BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
 
 # 상태 저장용
 user_sessions = {}
+
+print(f"🔗 Backend URL: {BACKEND_URL}")
 
 
 async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = None) -> dict:
@@ -22,6 +36,7 @@ async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = No
         url = f"{BACKEND_URL}{endpoint}"
         
         try:
+            print(f"📡 API 호출: {method} {url}")
             if method == "GET":
                 response = await client.get(url, params=data)
             else:
@@ -31,7 +46,28 @@ async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = No
             return response.json()
         
         except httpx.HTTPError as e:
+            print(f"❌ API 에러: {e}")
             return {"error": str(e)}
+
+
+async def check_backend_status() -> str:
+    """백엔드 및 모델 상태 확인"""
+    try:
+        result = await call_api("/health", "GET")
+        if "error" in result:
+            return "🔴 서버 연결 실패"
+        
+        llm_available = result.get("llm_available", False)
+        stats = result.get("stats", {})
+        doc_count = stats.get("documents", 0)
+        
+        if llm_available:
+            return f"🟢 모델 준비됨 (문서: {doc_count}개)"
+        else:
+            return "🟡 모델 로딩 중..."
+    except Exception as e:
+        print(f"❌ 상태 확인 에러: {e}")
+        return "🔴 서버 연결 실패"
 
 
 async def get_greeting(nickname: str) -> str:
@@ -189,19 +225,35 @@ CUSTOM_CSS = """
     border-radius: 10px;
     border-left: 4px solid #667eea;
 }
+.status-box {
+    padding: 10px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    text-align: center;
+    font-size: 14px;
+    background: #f0f0f0;
+}
 """
 
 # Gradio UI 구성
 with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     
-    gr.Markdown(
-        """
-        # 🏥 치매노인 맞춤형 헬스케어 챗봇
-        
-        따뜻하고 친절한 AI 도우미와 대화해보세요. 
-        이전 대화를 기억하고 개인화된 케어를 제공합니다.
-        """
-    )
+    with gr.Row():
+        with gr.Column(scale=4):
+            gr.Markdown(
+                """
+                # 🏥 치매노인 맞춤형 헬스케어 챗봇
+                
+                따뜻하고 친절한 AI 도우미와 대화해보세요. 
+                이전 대화를 기억하고 개인화된 케어를 제공합니다.
+                """
+            )
+        with gr.Column(scale=1):
+            status_display = gr.Markdown(
+                value="🟡 상태 확인 중...",
+                elem_classes=["status-box"]
+            )
+            refresh_status_btn = gr.Button("🔄 새로고침", size="sm")
     
     with gr.Row():
         with gr.Column(scale=3):
@@ -221,10 +273,11 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     with gr.Tabs() as tabs:
         # 채팅 탭
         with gr.TabItem("💬 대화하기"):
-            chatbot = gr.Chatbot(
-                label="대화",
-                height=400,
-            )
+            # Gradio 5.x는 type="messages" 필요, 6.x는 기본값이 messages
+            chatbot_kwargs = {"label": "대화", "height": 400}
+            if IS_GRADIO_5:
+                chatbot_kwargs["type"] = "messages"
+            chatbot = gr.Chatbot(**chatbot_kwargs)
             
             with gr.Row():
                 msg_input = gr.Textbox(
@@ -268,40 +321,91 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             profile_status = gr.Markdown()
     
     # 이벤트 핸들러
-    async def on_start(nickname):
-        if not nickname.strip():
-            return gr.update(visible=False), []
-        greeting = await get_greeting(nickname)
-        return gr.update(value=greeting, visible=True), []
+    # 상태 변수 (닉네임 잠금 여부)
+    nickname_locked = gr.State(False)
+    
+    async def on_start_or_reset(nickname, is_locked):
+        """시작하기/재설정 버튼 클릭 핸들러"""
+        if is_locked:
+            # 재설정 모드
+            return (
+                gr.update(visible=False),  # greeting_output
+                [],  # chatbot
+                gr.update(value="", interactive=True, info="채팅 시작 전 닉네임을 입력해주세요"),  # nickname_input 해제
+                gr.update(value="시작하기", variant="primary"),  # start_btn 복원
+                False  # nickname_locked = False
+            )
+        else:
+            # 시작 모드
+            if not nickname.strip():
+                return (
+                    gr.update(visible=False),
+                    [],
+                    gr.update(),
+                    gr.update(),
+                    False
+                )
+            greeting = await get_greeting(nickname)
+            return (
+                gr.update(value=greeting, visible=True),  # greeting_output
+                [],  # chatbot
+                gr.update(interactive=False, info=f"✅ {nickname}님으로 시작됨"),  # nickname_input 잠금
+                gr.update(value="🔄 재설정", variant="secondary"),  # start_btn 변경
+                True  # nickname_locked = True
+            )
+    
+    async def on_routine_refresh(nickname):
+        if not nickname:
+            return "닉네임을 먼저 입력해주세요."
+        return await get_routine_info(nickname)
     
     start_btn.click(
-        on_start,
-        inputs=[nickname_input],
-        outputs=[greeting_output, chatbot]
+        fn=on_start_or_reset,
+        inputs=[nickname_input, nickname_locked],
+        outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked],
+        api_name=False
     )
     
     msg_input.submit(
-        chat_with_bot,
+        fn=chat_with_bot,
         inputs=[nickname_input, msg_input, chatbot],
-        outputs=[chatbot, msg_input]
+        outputs=[chatbot, msg_input],
+        api_name=False
     )
     
     send_btn.click(
-        chat_with_bot,
+        fn=chat_with_bot,
         inputs=[nickname_input, msg_input, chatbot],
-        outputs=[chatbot, msg_input]
+        outputs=[chatbot, msg_input],
+        api_name=False
     )
     
-    clear_btn.click(lambda: [], None, chatbot)
+    clear_btn.click(fn=lambda: [], inputs=None, outputs=chatbot, api_name=False)
+    
+    # 상태 체크 이벤트
+    refresh_status_btn.click(
+        fn=check_backend_status,
+        inputs=None,
+        outputs=[status_display],
+        api_name=False
+    )
+    
+    # 페이지 로드 시 상태 체크
+    demo.load(
+        fn=check_backend_status,
+        inputs=None,
+        outputs=[status_display]
+    )
     
     refresh_routine_btn.click(
-        get_routine_info,
+        fn=on_routine_refresh,
         inputs=[nickname_input],
-        outputs=[routine_output]
+        outputs=[routine_output],
+        api_name=False
     )
     
     save_profile_btn.click(
-        save_patient_profile,
+        fn=save_patient_profile,
         inputs=[
             nickname_input,
             profile_name,
@@ -310,14 +414,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             profile_emergency,
             profile_notes
         ],
-        outputs=[profile_status]
-    )
-    
-    # 탭 변경 시 루틴 정보 로드
-    tabs.select(
-        lambda nickname: get_routine_info(nickname) if nickname else "닉네임을 먼저 입력해주세요.",
-        inputs=[nickname_input],
-        outputs=[routine_output]
+        outputs=[profile_status],
+        api_name=False
     )
 
 
@@ -326,7 +424,5 @@ if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
-        share=False,
-        theme=CUSTOM_THEME,
-        css=CUSTOM_CSS
+        share=False
     )

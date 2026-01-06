@@ -204,9 +204,9 @@ class LocalLLM(BaseLLM):
         """채팅 형식 생성"""
         return await self.client.chat(messages, **kwargs)
     
-    def is_available(self) -> bool:
+    async def is_available(self) -> bool:
         """모델 사용 가능 여부"""
-        return asyncio.run(self.client.is_available())
+        return await self.client.is_available()
     
     @property
     def embedding(self) -> LocalEmbedding:

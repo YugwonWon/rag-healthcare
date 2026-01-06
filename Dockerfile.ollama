@@ -3,7 +3,7 @@
 
 FROM python:3.12-slim
 
-# 환경변수 설정
+# 한글 로케일 및 환경변수 설정
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -13,20 +13,35 @@ ENV PYTHONUNBUFFERED=1 \
     LOG_TO_FILE=true \
     OLLAMA_HOST=0.0.0.0:11434 \
     OLLAMA_MODELS=/app/models \
-    OLLAMA_BASE_URL=http://localhost:11434
+    OLLAMA_BASE_URL=http://localhost:11434 \
+    LANG=ko_KR.UTF-8 \
+    LC_ALL=ko_KR.UTF-8 \
+    PYTHONIOENCODING=utf-8
 
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 시스템 의존성 설치 (Ollama 실행에 필요)
+# 시스템 의존성 설치 (Ollama 실행에 필요 + 한글 로케일)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     ca-certificates \
+    locales \
+    && sed -i '/ko_KR.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen ko_KR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-# Ollama 설치
-RUN curl -fsSL https://ollama.com/install.sh | sh
+# Ollama 설치 (재시도 로직 포함)
+RUN for i in 1 2 3 4 5; do \
+        echo "Ollama 설치 시도 $i/5..." && \
+        curl -fsSL --retry 5 --retry-delay 10 --retry-max-time 300 https://ollama.com/install.sh -o /tmp/install.sh && \
+        chmod +x /tmp/install.sh && \
+        /tmp/install.sh && \
+        rm /tmp/install.sh && \
+        break || \
+        (echo "시도 $i 실패, 10초 후 재시도..." && sleep 10); \
+    done && \
+    ollama --version
 
 # Python 의존성 설치
 COPY requirements.txt .
@@ -35,13 +50,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 애플리케이션 코드 복사
 COPY app/ ./app/
 COPY data/ ./data/
-COPY scripts/start_with_ollama.sh ./start.sh
+COPY scripts/ ./scripts/
 
-# 디렉토리 생성
-RUN mkdir -p /app/logs /app/models
-
-# 시작 스크립트 실행 권한
-RUN chmod +x ./start.sh
+# 디렉토리 생성 및 스크립트 권한
+RUN mkdir -p /app/logs /app/models && \
+    chmod +x ./scripts/start_with_ollama.sh
 
 # 포트 노출
 EXPOSE 8000
@@ -51,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # 시작 스크립트 실행 (Ollama 시작 → 모델 로드 → 앱 실행)
-CMD ["./start.sh"]
+CMD ["./scripts/start_with_ollama.sh"]
