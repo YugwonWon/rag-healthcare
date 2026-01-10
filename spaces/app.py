@@ -9,6 +9,63 @@ import gradio as gr
 from datetime import datetime
 from typing import Optional
 from packaging import version
+from deep_translator import GoogleTranslator
+
+
+def translate_to_english(text: str) -> str:
+    """한국어 텍스트를 영어로 번역"""
+    if not text or not text.strip():
+        return text
+    try:
+        translator = GoogleTranslator(source='ko', target='en')
+        return translator.translate(text)
+    except Exception as e:
+        print(f"번역 오류: {e}")
+        return ""
+
+
+def translate_line_by_line(text: str) -> str:
+    """각 줄마다 (영어 번역) 형식으로 변환"""
+    if not text or not text.strip():
+        return text
+    
+    lines = text.split('\n')
+    result_lines = []
+    translator = GoogleTranslator(source='ko', target='en')
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            result_lines.append(line)
+            continue
+        
+        # 이모지나 특수문자만 있는 줄은 번역하지 않음
+        # 한글이 포함된 경우에만 번역
+        import re
+        if not re.search(r'[가-힣]', stripped):
+            result_lines.append(line)
+            continue
+        
+        try:
+            translated = translator.translate(stripped)
+            result_lines.append(f"{line}\n({translated})")
+        except Exception as e:
+            print(f"줄 번역 오류: {e}")
+            result_lines.append(line)
+    
+    return '\n'.join(result_lines)
+
+
+def translate_to_korean(text: str) -> str:
+    """영어 텍스트를 한국어로 번역"""
+    if not text or not text.strip():
+        return text
+    try:
+        translator = GoogleTranslator(source='en', target='ko')
+        return translator.translate(text)
+    except Exception as e:
+        print(f"번역 오류: {e}")
+        return text
 
 # Gradio 버전 감지
 GRADIO_VERSION = version.parse(gr.__version__)
@@ -119,6 +176,7 @@ async def chat_with_bot(
     nickname: str,
     message: str,
     history: list,
+    enable_translation: bool = False,
 ) -> tuple[list, str]:
     """챗봇과 대화"""
     if not nickname.strip():
@@ -157,8 +215,15 @@ async def chat_with_bot(
             bot_response += "\n\n" + "\n".join(med_reminders)
     
     # 대화 기록 업데이트 (Gradio 6.x 형식)
-    history.append({"role": "user", "content": message})
-    history.append({"role": "assistant", "content": bot_response})
+    if enable_translation:
+        # 번역 모드: 각 줄마다 (영어 번역) 형식으로 표시
+        user_display = translate_line_by_line(message)
+        bot_display = translate_line_by_line(bot_response)
+        history.append({"role": "user", "content": user_display})
+        history.append({"role": "assistant", "content": bot_display})
+    else:
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": bot_response})
     
     return history, ""
 
@@ -322,7 +387,12 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                 )
                 send_btn = gr.Button("보내기", variant="primary", scale=1)
             
-            clear_btn = gr.Button("대화 초기화")
+            with gr.Row():
+                clear_btn = gr.Button("대화 초기화")
+                translate_toggle = gr.Checkbox(
+                    label="🌐 English Translation (영어 번역)",
+                    value=False
+                )
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
@@ -406,14 +476,14 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     
     msg_input.submit(
         fn=chat_with_bot,
-        inputs=[nickname_input, msg_input, chatbot],
+        inputs=[nickname_input, msg_input, chatbot, translate_toggle],
         outputs=[chatbot, msg_input],
         api_name=False
     )
     
     send_btn.click(
         fn=chat_with_bot,
-        inputs=[nickname_input, msg_input, chatbot],
+        inputs=[nickname_input, msg_input, chatbot, translate_toggle],
         outputs=[chatbot, msg_input],
         api_name=False
     )
@@ -468,6 +538,6 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
 if __name__ == "__main__":
     demo.launch(
         server_name="0.0.0.0",
-        server_port=7860,
+        server_port=7861,
         share=False
     )
