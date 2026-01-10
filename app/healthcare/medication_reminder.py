@@ -11,7 +11,7 @@ import json
 
 from app.config import settings, prompts
 from app.vector_store import get_chroma_handler
-from app.utils import get_kst_now
+from app.utils import get_kst_now, KST
 
 
 class MedicationFrequency(Enum):
@@ -137,8 +137,8 @@ class MedicationReminder:
                 continue
             
             for med_time in med.times:
-                # 시간 차이 계산
-                med_datetime = datetime.combine(now.date(), med_time)
+                # 시간 차이 계산 (timezone-aware)
+                med_datetime = datetime.combine(now.date(), med_time, tzinfo=KST)
                 time_diff = (med_datetime - now).total_seconds() / 60
                 
                 if -5 <= time_diff <= within_minutes:  # 5분 전 ~ within_minutes분 후
