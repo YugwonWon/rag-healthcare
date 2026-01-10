@@ -5,13 +5,14 @@ set -e
 
 # .env 파일 로드
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | grep -E '^GCP_|^SERVICE_NAME=' | xargs)
+    export $(grep -v '^#' .env | grep -E '^GCP_|^SERVICE_NAME=|^OLLAMA_MODEL=' | xargs)
 fi
 
 # 설정
 PROJECT_ID="${GCP_PROJECT_ID:-rag-healthcare-483412}"
 REGION="${GCP_REGION:-asia-northeast3}"
 SERVICE_NAME="${SERVICE_NAME:-healthcare-rag-chatbot}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
 
 # 색상 출력
@@ -24,6 +25,7 @@ echo -e "${GREEN}🚀 Cloud Run 배포 시작${NC}"
 echo "  프로젝트: ${PROJECT_ID}"
 echo "  리전: ${REGION}"
 echo "  서비스: ${SERVICE_NAME}"
+echo "  모델: ${OLLAMA_MODEL}"
 
 # 1. Cloud Build로 이미지 빌드 + GCR 푸시 (로컬 저장 없음)
 # Ollama 포함 Dockerfile 사용
@@ -50,7 +52,7 @@ gcloud run deploy ${SERVICE_NAME} \
     --execution-environment gen2 \
     --set-env-vars "CHROMA_IN_MEMORY=false" \
     --set-env-vars "CHROMA_PERSIST_DIR=/app/data/chroma" \
-    --set-env-vars "OLLAMA_MODEL=qwen2.5:3b" \
+    --set-env-vars "OLLAMA_MODEL=${OLLAMA_MODEL}" \
     --set-env-vars "OLLAMA_BASE_URL=http://localhost:11434" \
     --project ${PROJECT_ID}
 
