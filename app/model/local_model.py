@@ -98,6 +98,9 @@ class OllamaClient:
             "options": {
                 "temperature": temperature or settings.LLM_TEMPERATURE,
                 "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
+                "repeat_penalty": 1.1,  # 반복 방지
+                "top_p": 0.9,
+                "top_k": 40,
             }
         }
         

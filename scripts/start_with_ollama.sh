@@ -3,8 +3,12 @@
 
 set -e
 
+# UTF-8 환경 및 Ollama 로그 레벨 설정
+export PYTHONIOENCODING=utf-8
+export OLLAMA_DEBUG=0
+
 echo "🚀 Starting Ollama server..."
-ollama serve &
+ollama serve 2>&1 | grep -v "print_info\|llama_\|ggml_\|rope_\|vocab\|token" &
 OLLAMA_PID=$!
 
 # Ollama 서버가 준비될 때까지 대기
@@ -27,9 +31,10 @@ echo "📦 Checking model: ${MODEL_NAME}..."
 
 if ! ollama list | grep -q "${MODEL_NAME}"; then
     echo "⬇️ Pulling model: ${MODEL_NAME} (this may take a while on first run)..."
-    # 3번 재시도
+    echo "   Progress logs suppressed. Please wait..."
+    # 3번 재시도 (진행 상황 로그 숨김)
     for attempt in 1 2 3; do
-        if ollama pull ${MODEL_NAME}; then
+        if ollama pull ${MODEL_NAME} 2>&1 | grep -E "(success|error|failed|pulling [a-f0-9]+:.*100%)" || [ ${PIPESTATUS[0]} -eq 0 ]; then
             echo "✅ Model pulled successfully!"
             break
         else
@@ -45,20 +50,19 @@ else
     echo "✅ Model already available!"
 fi
 
-# 모델 검증 (한글 테스트)
-echo "🔍 Verifying model with Korean test..."
+# 모델 검증 (한글 테스트) - 로그 간소화
+echo "🔍 Verifying model..."
 KOREAN_TEST=$(curl -s http://localhost:11434/api/generate -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"안녕하세요라고 말해주세요\", \"stream\": false}" 2>&1)
 if echo "$KOREAN_TEST" | grep -q "안녕"; then
     echo "✅ Korean language support verified!"
 else
-    echo "⚠️ Korean test response: $KOREAN_TEST"
     echo "⚠️ Model may have issues with Korean, but continuing..."
 fi
 
-# 모델 미리 로드 (워밍업)
+# 모델 미리 로드 (워밍업) - 로그 간소화
 echo "🔥 Warming up model..."
 curl -s http://localhost:11434/api/generate -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"hello\", \"stream\": false}" > /dev/null 2>&1 || true
-echo "✅ Model warmed up!"
+echo "✅ Model ready!"
 
 # ChromaDB 상태 확인 및 문서 초기화
 echo "📚 Checking ChromaDB data..."
