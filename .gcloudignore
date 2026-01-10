@@ -53,6 +53,9 @@ tests/
 outputs/
 finetuning/
 
+# 로컬 모델 파일 (대용량 GGUF)
+models/
+
 # Spaces (별도 배포)
 spaces/
 
