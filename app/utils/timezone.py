@@ -25,8 +25,21 @@ def get_kst_date_str() -> str:
 
 
 def get_kst_datetime_str() -> str:
-    """현재 한국 날짜시간 문자열 반환"""
-    return get_kst_now().strftime("%Y-%m-%d %H:%M:%S KST")
+    """현재 한국 날짜시간 문자열 반환 (LLM이 이해하기 쉬운 형식)"""
+    now = get_kst_now()
+    hour = now.hour
+    minute = now.minute
+    
+    # 오전/오후 구분
+    if hour < 12:
+        period = "오전"
+        display_hour = hour if hour > 0 else 12
+    else:
+        period = "오후"
+        display_hour = hour - 12 if hour > 12 else 12
+    
+    # 예: "2026년 1월 10일 오후 3시 25분"
+    return now.strftime(f"%Y년 %m월 %d일 {period} {display_hour}시 {minute:02d}분")
 
 
 def format_kst_time(dt: datetime) -> str:
