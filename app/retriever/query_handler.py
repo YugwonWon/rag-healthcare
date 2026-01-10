@@ -84,6 +84,7 @@ class RAGQueryHandler:
         
         # 3. 대화 기록 조회 (개인화) - 최근 3개로 제한하여 응답 속도 개선
         conversation_history = ""
+        activity_context = ""
         if include_history:
             conv_results = self._chroma.get_user_conversations(
                 nickname=nickname,
@@ -91,12 +92,20 @@ class RAGQueryHandler:
                 n_results=3
             )
             conversation_history = self._format_conversation_history(conv_results)
+            
+            # 최근 활동 요약 추가
+            activity_summary = self._chroma.get_user_activity_summary(nickname, hours=24)
+            activity_context = self._format_activity_summary(activity_summary)
         
         # 4. 건강 위험 신호 컨텍스트 추가
         health_context = self._format_health_analysis(health_analysis)
         
         # 현재 한국 시간 가져오기
         current_time = get_kst_datetime_str()
+        
+        # 대화 기록에 활동 요약 추가
+        if activity_context:
+            conversation_history = f"{conversation_history}\n\n{activity_context}"
         
         # 5. 프롬프트 구성 (건강 분석 결과 포함)
         system_prompt = prompts.SYSTEM_PROMPT.format(
@@ -309,6 +318,41 @@ class RAGQueryHandler:
             history_parts.append(doc[:200] if len(doc) > 200 else doc)
         
         return "\n---\n".join(history_parts)
+    
+    def _format_activity_summary(self, activity_data: dict) -> str:
+        """활동 요약 포맷팅"""
+        if not activity_data:
+            return ""
+        
+        summary = activity_data.get("summary", {})
+        if not summary:
+            return ""
+        
+        from app.healthcare.daily_routine import get_kst_now
+        
+        parts = ["[오늘의 활동 기록]"]
+        for activity, info in summary.items():
+            count = info.get("count", 0)
+            last_time = info.get("last_time")
+            if last_time:
+                # 시간 차이 계산
+                now = get_kst_now()
+                if last_time.tzinfo is None:
+                    from app.healthcare.daily_routine import KST
+                    last_time = last_time.replace(tzinfo=KST)
+                diff = now - last_time
+                hours_ago = int(diff.total_seconds() / 3600)
+                if hours_ago < 1:
+                    time_str = "방금 전"
+                elif hours_ago < 24:
+                    time_str = f"{hours_ago}시간 전"
+                else:
+                    time_str = f"{hours_ago // 24}일 전"
+                parts.append(f"- {activity}: {count}회 (마지막: {time_str})")
+            else:
+                parts.append(f"- {activity}: {count}회")
+        
+        return "\n".join(parts) if len(parts) > 1 else ""
 
 
 def get_query_handler(use_ner_model: bool = True) -> RAGQueryHandler:
