@@ -21,11 +21,26 @@ class Settings(BaseSettings):
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
     
-    # LLM 설정 (Ollama/Qwen)
+    # LLM 설정 (Ollama)
+    # ============================================================
+    # 지원 모델 목록:
+    # - kanana: Kakao Kanana-nano 2.1B Instruct (추천)
+    #   └ HuggingFace: kakaocorp/kanana-nano-2.1b-instruct
+    #   └ GGUF: ch00n/kanana-nano-2.1b-instruct-Q4_K_M-GGUF
+    #   └ 특징: 한국어 특화, 2.1B 경량 모델, 빠른 응답
+    #
+    # - qwen2.5:3b: Alibaba Qwen 2.5 3B
+    #   └ Ollama 공식 모델
+    #   └ 특징: 다국어 지원, 안정적
+    #
+    # - qwen3-2507: Qwen3 4B Instruct (2507 버전)
+    #   └ HuggingFace: unsloth/Qwen3-4B-Instruct-2507-GGUF
+    #   └ 특징: Thinking mode 없음
+    # ============================================================
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen2.5:3b"
+    OLLAMA_MODEL: str = "kanana"  # Kakao Kanana-nano 2.1B Instruct
     LLM_TEMPERATURE: float = 0.7
-    LLM_MAX_TOKENS: int = 2048
+    LLM_MAX_TOKENS: int = 1024  # 응답 속도 개선을 위해 2048 -> 1024
     
     # OpenAI 설정 (Fallback용)
     OPENAI_API_KEY: Optional[str] = None

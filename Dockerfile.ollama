@@ -3,8 +3,9 @@
 
 FROM python:3.12-slim
 
-# 한글 로케일 및 환경변수 설정
-ENV PYTHONUNBUFFERED=1 \
+# debconf 경고 방지 및 환경변수 설정
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -14,22 +15,27 @@ ENV PYTHONUNBUFFERED=1 \
     OLLAMA_HOST=0.0.0.0:11434 \
     OLLAMA_MODELS=/app/models \
     OLLAMA_BASE_URL=http://localhost:11434 \
-    LANG=ko_KR.UTF-8 \
-    LC_ALL=ko_KR.UTF-8 \
+    OLLAMA_DEBUG=0 \
+    OLLAMA_FLASH_ATTENTION=1 \
     PYTHONIOENCODING=utf-8
 
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 시스템 의존성 설치 (Ollama 실행에 필요 + 한글 로케일)
+# 시스템 의존성 설치 (Ollama 실행에 필요 + 로케일)
+# 참고: 한글 로케일은 Cloud Run에서 필수가 아니며, UTF-8만 있으면 충분함
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     ca-certificates \
     locales \
-    && sed -i '/ko_KR.UTF-8/s/^# //g' /etc/locale.gen \
-    && locale-gen ko_KR.UTF-8 \
+    && echo "en_US.UTF-8 UTF-8" > /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
+
+# UTF-8 로케일 설정 (한글은 Python에서 처리)
+ENV LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
 
 # Ollama 설치 (재시도 로직 포함)
 RUN for i in 1 2 3 4 5; do \

@@ -199,7 +199,7 @@ class RAGQueryHandler:
         # 현재 한국 시간 확인
         now = get_kst_now()
         hour = now.hour
-        self._logger.info(f"현재 한국 시간: {now.strftime('%Y-%m-%d %H:%M:%S KST')}")
+        logger.info(f"현재 한국 시간: {now.strftime('%Y-%m-%d %H:%M:%S KST')}")
         
         if 5 <= hour < 12:
             time_of_day = "아침"
@@ -220,6 +220,10 @@ class RAGQueryHandler:
             
             # 이전 대화 내용 기반 후속 질문 생성
             if last_time:
+                # timezone-naive인 경우 KST로 변환
+                if last_time.tzinfo is None:
+                    from app.healthcare.daily_routine import KST
+                    last_time = last_time.replace(tzinfo=KST)
                 time_diff = now - last_time
                 hours_ago = time_diff.total_seconds() / 3600
                 
