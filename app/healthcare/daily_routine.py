@@ -10,7 +10,7 @@ from enum import Enum
 
 from app.config import settings
 from app.vector_store import get_chroma_handler
-from app.utils import get_kst_now
+from app.utils import get_kst_now, KST
 
 
 class ActivityType(Enum):
@@ -143,7 +143,7 @@ class DailyRoutineManager:
         for i, item in enumerate(routine):
             scheduled_time = item.scheduled_time
             end_time = (
-                datetime.combine(now.date(), scheduled_time) + 
+                datetime.combine(now.date(), scheduled_time, tzinfo=KST) + 
                 timedelta(minutes=item.duration_minutes)
             ).time()
             
@@ -330,7 +330,7 @@ class DailyRoutineManager:
     def _minutes_until(self, target_time: time) -> int:
         """지정 시간까지 남은 분 계산"""
         now = get_kst_now()
-        target = datetime.combine(now.date(), target_time)
+        target = datetime.combine(now.date(), target_time, tzinfo=KST)
         
         if target < now:
             target += timedelta(days=1)
