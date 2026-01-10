@@ -94,6 +94,55 @@ class ChromaHandler:
             ids=ids
         )
     
+    def _extract_activities(self, message: str) -> str:
+        """
+        사용자 메시지에서 활동/행동 추출
+        
+        Args:
+            message: 사용자 메시지
+            
+        Returns:
+            감지된 활동들 (쉼표로 구분)
+        """
+        import re
+        
+        activities = []
+        message_lower = message.lower()
+        
+        # 활동 패턴 정의
+        activity_patterns = {
+            # 식사 관련
+            "아침식사": r"아침.*(먹|드|식사)|아침밥",
+            "점심식사": r"점심.*(먹|드|식사)|점심밥",
+            "저녁식사": r"저녁.*(먹|드|식사)|저녁밥",
+            "식사": r"밥.*(먹|드)|식사.*(했|함|완료)|먹었어",
+            "간식": r"간식|과자|과일|차.*(마시|마셨)",
+            
+            # 복약 관련
+            "복약": r"약.*(먹|드|복용)|복약|알약",
+            
+            # 활동 관련
+            "산책": r"산책|걷|걸었|바깥|외출|나갔다",
+            "운동": r"운동|체조|스트레칭",
+            "수면": r"잤|잠|자고|깼|일어났|기상",
+            "목욕": r"씻|목욕|샤워|세수",
+            "TV시청": r"TV|텔레비전|드라마|뉴스.*(봤|시청)",
+            "독서": r"책.*(읽|봤)|신문",
+            "전화": r"전화|통화",
+            "방문": r"왔|찾아왔|만났|손님",
+            
+            # 감정/상태
+            "기분좋음": r"기분.*(좋|괜찮)|행복|즐거|좋았어",
+            "기분나쁨": r"기분.*(나쁘|안좋|우울)|슬프|힘들",
+            "통증": r"아프|아파|통증|두통|머리.*(아프|아파)",
+        }
+        
+        for activity, pattern in activity_patterns.items():
+            if re.search(pattern, message):
+                activities.append(activity)
+        
+        return ",".join(activities) if activities else ""
+    
     def search_documents(
         self,
         query: str,
@@ -158,12 +207,16 @@ class ChromaHandler:
                 else:
                     normalized_metadata[key] = str(value)
         
+        # 사용자 메시지에서 활동/행동 추출
+        detected_activities = self._extract_activities(user_message)
+        
         conv_metadata = {
             "nickname": nickname,
             "timestamp": timestamp.isoformat(),
             "date": timestamp.strftime("%Y-%m-%d"),
             "time": timestamp.strftime("%H:%M:%S"),
             "user_message": user_message[:500],  # 메타데이터 크기 제한
+            "activities": detected_activities,  # 감지된 활동
             **normalized_metadata
         }
         
@@ -267,6 +320,7 @@ class ChromaHandler:
                         activities.append({
                             "timestamp": timestamp,
                             "message": metadata.get("user_message", ""),
+                            "activities": metadata.get("activities", ""),  # 감지된 활동
                             "document": results["documents"][i] if results.get("documents") else ""
                         })
                 except (ValueError, TypeError):
@@ -275,6 +329,41 @@ class ChromaHandler:
         # 시간순 정렬
         activities.sort(key=lambda x: x["timestamp"], reverse=True)
         return activities
+    
+    def get_user_activity_summary(self, nickname: str, hours: int = 24) -> dict:
+        """
+        사용자의 최근 활동 요약
+        
+        Args:
+            nickname: 사용자 닉네임
+            hours: 조회할 시간 범위
+            
+        Returns:
+            활동 요약 딕셔너리
+        """
+        recent = self.get_recent_activities(nickname, hours)
+        
+        # 활동별 횟수 및 마지막 시간 집계
+        activity_summary = {}
+        for item in recent:
+            activities_str = item.get("activities", "")
+            if activities_str:
+                for activity in activities_str.split(","):
+                    activity = activity.strip()
+                    if activity:
+                        if activity not in activity_summary:
+                            activity_summary[activity] = {
+                                "count": 0,
+                                "last_time": None
+                            }
+                        activity_summary[activity]["count"] += 1
+                        if activity_summary[activity]["last_time"] is None:
+                            activity_summary[activity]["last_time"] = item["timestamp"]
+        
+        return {
+            "summary": activity_summary,
+            "total_conversations": len(recent)
+        }
     
     def save_patient_profile(
         self,

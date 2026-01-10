@@ -172,6 +172,16 @@ async def get_greeting(nickname: str) -> str:
     return response
 
 
+async def get_profile(nickname: str) -> dict:
+    """저장된 프로필 불러오기"""
+    result = await call_api(f"/profile/{nickname}", "GET")
+    
+    if "error" in result:
+        return {}
+    
+    return result.get("profile", {})
+
+
 async def chat_with_bot(
     nickname: str,
     message: str,
@@ -216,9 +226,9 @@ async def chat_with_bot(
     
     # 대화 기록 업데이트 (Gradio 6.x 형식)
     if enable_translation:
-        # 번역 모드: 각 줄마다 (영어 번역) 형식으로 표시
-        user_display = translate_line_by_line(message)
-        bot_display = translate_line_by_line(bot_response)
+        # 번역 모드: 영어로만 표시
+        user_display = translate_to_english(message)
+        bot_display = translate_to_english(bot_response)
         history.append({"role": "user", "content": user_display})
         history.append({"role": "assistant", "content": bot_display})
     else:
@@ -441,7 +451,12 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                 [],  # chatbot
                 gr.update(value="", interactive=True, info="채팅 시작 전 닉네임을 입력해주세요"),  # nickname_input 해제
                 gr.update(value="시작하기", variant="primary"),  # start_btn 복원
-                False  # nickname_locked = False
+                False,  # nickname_locked = False
+                gr.update(),  # profile_name
+                gr.update(),  # profile_age
+                gr.update(),  # profile_conditions
+                gr.update(),  # profile_emergency
+                gr.update(),  # profile_notes
             )
         else:
             # 시작 모드
@@ -451,15 +466,27 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                     [],
                     gr.update(),
                     gr.update(),
-                    False
+                    False,
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
                 )
             greeting = await get_greeting(nickname)
+            # 저장된 프로필 불러오기
+            profile = await get_profile(nickname)
             return (
                 gr.update(value=greeting, visible=True),  # greeting_output
                 [],  # chatbot
                 gr.update(interactive=False, info=f"✅ {nickname}님으로 시작됨"),  # nickname_input 잠금
                 gr.update(value="🔄 재설정", variant="secondary"),  # start_btn 변경
-                True  # nickname_locked = True
+                True,  # nickname_locked = True
+                gr.update(value=profile.get("name", "")),  # profile_name
+                gr.update(value=profile.get("age", 0) or 0),  # profile_age
+                gr.update(value=profile.get("conditions", "")),  # profile_conditions
+                gr.update(value=profile.get("emergency_contact", "")),  # profile_emergency
+                gr.update(value=profile.get("notes", "")),  # profile_notes
             )
     
     async def on_routine_refresh(nickname):
@@ -470,7 +497,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     start_btn.click(
         fn=on_start_or_reset,
         inputs=[nickname_input, nickname_locked],
-        outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked],
+        outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked,
+                 profile_name, profile_age, profile_conditions, profile_emergency, profile_notes],
         api_name=False
     )
     
