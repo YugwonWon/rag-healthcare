@@ -19,11 +19,15 @@
 | 구성요소 | 기술 |
 |---------|------|
 | **백엔드** | FastAPI, Python 3.12+ |
-| **LLM** | Qwen 2.5 3B (Ollama) |
+| **LLM** | kanana 2.1B nano, Qwen 2.5 3B (Ollama) |
 | **임베딩** | sentence-transformers/all-MiniLM-L6-v2 (384차원) |
 | **벡터DB** | ChromaDB |
 | **프론트엔드** | Gradio (HuggingFace Spaces) |
 | **배포** | Google Cloud Run |
+
+## 🎮 데모
+
+👉 **[HuggingFace Spaces에서 체험하기](https://huggingface.co/spaces/Yugwon/rag-healthcare)**
 
 ## 🚀 빠른 시작
 
