@@ -50,10 +50,16 @@ gcloud run deploy ${SERVICE_NAME} \
     --concurrency 5 \
     --cpu-boost \
     --execution-environment gen2 \
+    --add-cloudsql-instances ${PROJECT_ID}:${REGION}:healthcare-db \
     --set-env-vars "CHROMA_IN_MEMORY=false" \
     --set-env-vars "CHROMA_PERSIST_DIR=/app/data/chroma" \
     --set-env-vars "OLLAMA_MODEL=${OLLAMA_MODEL}" \
     --set-env-vars "OLLAMA_BASE_URL=http://localhost:11434" \
+    --set-env-vars "USE_LANGCHAIN_STORE=true" \
+    --set-env-vars "DB_HOST=/cloudsql/${PROJECT_ID}:${REGION}:healthcare-db" \
+    --set-env-vars "DB_NAME=healthcare" \
+    --set-env-vars "DB_USER=postgres" \
+    --set-secrets "DB_PASSWORD=db-password:latest" \
     --project ${PROJECT_ID}
 
 # 4. 서비스 URL 확인

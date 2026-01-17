@@ -51,10 +51,39 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 384
     EMBEDDING_DEVICE: str = "cpu"  # cpu, cuda, mps
     
-    # ChromaDB 설정
+    # ChromaDB 설정 (폴백용)
     CHROMA_PERSIST_DIR: str = "./data/chroma"
     CHROMA_COLLECTION_NAME: str = "healthcare_docs"
     CHROMA_IN_MEMORY: bool = False  # Cloud Run에서는 True
+    
+    # PostgreSQL + pgvector 설정 (LangChain 데이터 레이어)
+    # Cloud SQL 연결 문자열 형식:
+    # - 로컬: postgresql://user:pass@localhost:5432/dbname
+    # - Cloud SQL (Unix Socket): postgresql://user:pass@/dbname?host=/cloudsql/project:region:instance
+    DATABASE_URL: Optional[str] = None
+    USE_LANGCHAIN_STORE: bool = False  # True면 LangChain + pgvector, False면 ChromaDB
+    
+    # Cloud SQL 개별 환경 변수 (Secret Manager 지원)
+    DB_HOST: Optional[str] = None  # /cloudsql/project:region:instance
+    DB_NAME: Optional[str] = None
+    DB_USER: Optional[str] = None
+    DB_PASSWORD: Optional[str] = None  # Secret Manager에서 주입
+    
+    @property
+    def database_url(self) -> Optional[str]:
+        """DATABASE_URL 또는 개별 환경 변수로 연결 문자열 생성"""
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+        # 개별 환경 변수에서 조합 (Cloud Run + Secret Manager)
+        if all([self.DB_HOST, self.DB_NAME, self.DB_USER, self.DB_PASSWORD]):
+            if self.DB_HOST.startswith("/cloudsql/"):
+                # Unix 소켓 연결
+                return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@/{self.DB_NAME}?host={self.DB_HOST}"
+            else:
+                # TCP 연결
+                return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}/{self.DB_NAME}"
+        return None
+
     
     # 대화 기록 설정
     CONVERSATION_COLLECTION_NAME: str = "conversations"

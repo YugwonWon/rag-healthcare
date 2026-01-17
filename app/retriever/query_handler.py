@@ -3,6 +3,10 @@ RAG 쿼리 핸들러
 치매노인 맞춤형 개인화 대화 처리
 
 NER(개체명 인식)과 N-gram 기반 건강 위험 신호 감지 전처리 포함
+
+데이터 레이어:
+- USE_LANGCHAIN_STORE=True: LangChain + pgvector (Cloud SQL)
+- USE_LANGCHAIN_STORE=False: ChromaDB (기본값)
 """
 
 from datetime import datetime, timedelta
@@ -20,6 +24,10 @@ from app.preprocessing import (
 from app.preprocessing.health_signal_detector import RiskLevel
 from app.logger import get_logger
 
+# LangChain 스토어 (선택적)
+if settings.USE_LANGCHAIN_STORE:
+    from app.langchain_store import get_langchain_store
+
 logger = get_logger(__name__)
 
 
@@ -36,7 +44,17 @@ class RAGQueryHandler:
             use_ner_model: NER 모델 사용 여부 (False면 키워드 매칭만 사용)
         """
         self._llm = get_llm()
-        self._chroma = get_chroma_handler()
+        
+        # 데이터 스토어 선택 (환경변수 기반)
+        self._use_langchain = settings.USE_LANGCHAIN_STORE
+        if self._use_langchain:
+            self._store = get_langchain_store()
+            self._chroma = None
+            logger.info("LangChain 데이터 스토어 사용 (pgvector)")
+        else:
+            self._store = None
+            self._chroma = get_chroma_handler()
+            logger.info("ChromaDB 데이터 스토어 사용")
         
         # 전처리 모듈 초기화
         self._use_ner_model = use_ner_model
@@ -74,28 +92,25 @@ class RAGQueryHandler:
         logger.debug(f"전처리 완료 | risk_level={risk_level} | terms={health_analysis.get('detected_health_terms', [])}")
         
         # 1. 환자 프로필 조회
-        patient_profile = self._chroma.get_patient_profile(nickname)
+        patient_profile = await self._get_profile(nickname)
         patient_info = self._format_patient_info(patient_profile)
         
         # 2. 관련 문서 검색 (향상된 쿼리 사용)
-        doc_results = self._chroma.search_documents(enhanced_query)
+        doc_results = self._search_documents(enhanced_query)
         retrieved_context = self._format_retrieved_context(doc_results)
-        logger.debug(f"문서 검색 완료 | 결과 수={len(doc_results.get('documents', [[]])[0])}")
+        logger.debug(f"문서 검색 완료 | 결과 수={len(doc_results) if isinstance(doc_results, list) else len(doc_results.get('documents', [[]])[0])}")
         
         # 3. 대화 기록 조회 (개인화) - 최근 3개로 제한하여 응답 속도 개선
         conversation_history = ""
         activity_context = ""
         if include_history:
-            conv_results = self._chroma.get_user_conversations(
-                nickname=nickname,
-                query=query,
-                n_results=3
-            )
+            conv_results = self._get_conversations(nickname, query, n_results=3)
             conversation_history = self._format_conversation_history(conv_results)
             
-            # 최근 활동 요약 추가
-            activity_summary = self._chroma.get_user_activity_summary(nickname, hours=24)
-            activity_context = self._format_activity_summary(activity_summary)
+            # 최근 활동 요약 추가 (ChromaDB 전용, LangChain은 추후 지원)
+            if not self._use_langchain:
+                activity_summary = self._chroma.get_user_activity_summary(nickname, hours=24)
+                activity_context = self._format_activity_summary(activity_summary)
         
         # 4. 건강 위험 신호 컨텍스트 추가
         health_context = self._format_health_analysis(health_analysis)
@@ -132,7 +147,7 @@ class RAGQueryHandler:
         logger.info(f"LLM 응답 완료 | 길이={len(response)}")
         
         # 7. 대화 기록 저장 (건강 분석 메타데이터 포함)
-        self._chroma.add_conversation(
+        self._save_conversation(
             nickname=nickname,
             user_message=query,
             assistant_response=response,
@@ -147,6 +162,48 @@ class RAGQueryHandler:
             "response": response,
             "health_analysis": health_analysis if risk_level != "low" else None
         }
+    
+    # ==========================================
+    # 데이터 레이어 추상화 메서드
+    # ==========================================
+    
+    async def _get_profile(self, nickname: str) -> dict:
+        """프로필 조회 (LangChain/ChromaDB 분기)"""
+        if self._use_langchain:
+            return await self._store.get_profile(nickname)
+        else:
+            return self._chroma.get_patient_profile(nickname)
+    
+    def _search_documents(self, query: str, k: int = 5) -> Any:
+        """문서 검색 (LangChain/ChromaDB 분기)"""
+        if self._use_langchain:
+            return self._store.search_documents(query, k=k)
+        else:
+            return self._chroma.search_documents(query)
+    
+    def _get_conversations(self, nickname: str, query: str, n_results: int = 3) -> Any:
+        """대화 기록 조회 (LangChain/ChromaDB 분기)"""
+        if self._use_langchain:
+            return self._store.get_recent_conversations(nickname, limit=n_results)
+        else:
+            return self._chroma.get_user_conversations(
+                nickname=nickname,
+                query=query,
+                n_results=n_results
+            )
+    
+    def _save_conversation(self, nickname: str, user_message: str, 
+                          assistant_response: str, metadata: dict = None):
+        """대화 저장 (LangChain/ChromaDB 분기)"""
+        if self._use_langchain:
+            self._store.save_conversation(nickname, user_message, assistant_response)
+        else:
+            self._chroma.add_conversation(
+                nickname=nickname,
+                user_message=user_message,
+                assistant_response=assistant_response,
+                metadata=metadata
+            )
     
     def _preprocess_query(self, query: str) -> Dict[str, Any]:
         """NER + N-gram 기반 쿼리 전처리
@@ -285,25 +342,42 @@ class RAGQueryHandler:
         
         return "\n".join(info_lines) if info_lines else "기본 정보만 등록됨"
     
-    def _format_retrieved_context(self, results: dict) -> str:
-        """검색된 문서 컨텍스트 포맷팅"""
-        if not results or not results.get("documents"):
+    def _format_retrieved_context(self, results: Any) -> str:
+        """검색된 문서 컨텍스트 포맷팅 (LangChain/ChromaDB 분기)"""
+        if not results:
             return "관련 의료 정보 없음"
         
-        documents = results["documents"][0] if results["documents"] else []
-        
         context_parts = []
-        # 컨텍스트 길이 최적화: 각 문서 300자로 제한 (LLM 응답 속도 개선)
-        for i, doc in enumerate(documents[:3], 1):  # 최대 3개 문서만 사용
-            context_parts.append(f"[{i}] {doc[:300]}")
         
-        return "\n\n".join(context_parts)
+        # LangChain 형식: list[dict] with "content", "score"
+        if self._use_langchain and isinstance(results, list):
+            for i, doc in enumerate(results[:3], 1):
+                content = doc.get("content", "")[:300]
+                context_parts.append(f"[{i}] {content}")
+        # ChromaDB 형식: dict with "documents"
+        elif isinstance(results, dict) and results.get("documents"):
+            documents = results["documents"][0] if results["documents"] else []
+            for i, doc in enumerate(documents[:3], 1):
+                context_parts.append(f"[{i}] {doc[:300]}")
+        
+        return "\n\n".join(context_parts) if context_parts else "관련 의료 정보 없음"
     
-    def _format_conversation_history(self, results: dict) -> str:
-        """대화 기록 포맷팅"""
+    def _format_conversation_history(self, results: Any) -> str:
+        """대화 기록 포맷팅 (LangChain/ChromaDB 분기)"""
         if not results:
             return "이전 대화 없음"
         
+        history_parts = []
+        
+        # LangChain 형식: list[dict] with "role", "content"
+        if self._use_langchain and isinstance(results, list):
+            for msg in results[-6:]:  # 최근 3쌍 (6개 메시지)
+                role = "사용자" if msg.get("role") == "user" else "AI"
+                content = msg.get("content", "")[:200]
+                history_parts.append(f"{role}: {content}")
+            return "\n".join(history_parts) if history_parts else "이전 대화 없음"
+        
+        # ChromaDB 형식: dict with "documents"
         documents = results.get("documents", [])
         if isinstance(documents, list) and len(documents) > 0:
             if isinstance(documents[0], list):
