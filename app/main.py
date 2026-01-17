@@ -24,6 +24,17 @@ from app.logger import init_logging, get_logger, log_startup_info, log_request, 
 init_logging()
 logger = get_logger(__name__)
 
+# LangChain 스토어 (선택적 - PostgreSQL 사용 시)
+if settings.USE_LANGCHAIN_STORE:
+    from app.langchain_store import get_langchain_store
+    _langchain_store = None
+    
+    def get_store():
+        global _langchain_store
+        if _langchain_store is None:
+            _langchain_store = get_langchain_store()
+        return _langchain_store
+
 
 # 요청/응답 모델
 class ChatRequest(BaseModel):
@@ -96,17 +107,28 @@ async def lifespan(app: FastAPI):
         "EMBEDDING_MODEL": settings.EMBEDDING_MODEL,
         "RAG_TOP_K": settings.RAG_TOP_K,
         "CHROMA_IN_MEMORY": settings.CHROMA_IN_MEMORY,
+        "USE_LANGCHAIN_STORE": settings.USE_LANGCHAIN_STORE,
     }
     log_startup_info(logger, settings.APP_NAME, settings.APP_VERSION, config_info)
     
-    # ChromaDB 초기화
+    # ChromaDB 초기화 (기본 벡터 스토어)
     chroma = get_chroma_handler()
     stats = chroma.get_collection_stats()
     logger.info(f"📚 컨렉션 통계: 문서={stats['documents']}, 대화={stats['conversations']}, 프로필={stats['patient_profiles']}")
     
+    # LangChain store 연결 풀 초기화 (PostgreSQL 사용 시)
+    if settings.USE_LANGCHAIN_STORE:
+        store = get_store()
+        await store.init_pool()
+        logger.info("🐘 PostgreSQL 연결 풀 초기화 완료")
+    
     yield
     
     # 종료 시
+    if settings.USE_LANGCHAIN_STORE:
+        store = get_store()
+        await store.close_pool()
+        logger.info("🐘 PostgreSQL 연결 풀 종료")
     logger.info("👋 서버 종료...")
 
 
@@ -283,6 +305,8 @@ async def save_profile(
 ):
     """
     환자 프로필 저장
+    USE_LANGCHAIN_STORE=true: PostgreSQL에 저장 (Cloud SQL)
+    USE_LANGCHAIN_STORE=false: ChromaDB에 저장
     """
     try:
         profile_data = {
@@ -298,7 +322,16 @@ async def save_profile(
         # None 값 제거
         profile_data = {k: v for k, v in profile_data.items() if v is not None}
         
-        chroma.save_patient_profile(request.nickname, profile_data)
+        # 스토어 선택 (환경변수 기반)
+        if settings.USE_LANGCHAIN_STORE:
+            store = get_store()
+            success = await store.save_profile(request.nickname, profile_data)
+            if not success:
+                raise Exception("PostgreSQL 저장 실패")
+            logger.info(f"프로필 저장 (PostgreSQL): {request.nickname}")
+        else:
+            chroma.save_patient_profile(request.nickname, profile_data)
+            logger.info(f"프로필 저장 (ChromaDB): {request.nickname}")
         
         # 루틴 초기화
         routine_manager.initialize_routine(request.nickname)
@@ -306,10 +339,12 @@ async def save_profile(
         return {
             "status": "success",
             "message": f"{request.nickname}님의 프로필이 저장되었습니다.",
-            "profile": profile_data
+            "profile": profile_data,
+            "store": "postgresql" if settings.USE_LANGCHAIN_STORE else "chromadb"
         }
     
     except Exception as e:
+        logger.error(f"프로필 저장 오류: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"프로필 저장 중 오류: {str(e)}")
 
 
@@ -317,13 +352,19 @@ async def save_profile(
 async def get_profile(nickname: str, chroma=Depends(get_chroma)):
     """
     환자 프로필 조회
+    USE_LANGCHAIN_STORE=true: PostgreSQL에서 조회
+    USE_LANGCHAIN_STORE=false: ChromaDB에서 조회
     """
-    profile = chroma.get_patient_profile(nickname)
+    if settings.USE_LANGCHAIN_STORE:
+        store = get_store()
+        profile = await store.get_profile(nickname)
+    else:
+        profile = chroma.get_patient_profile(nickname)
     
     if not profile:
         raise HTTPException(status_code=404, detail=f"{nickname}님의 프로필을 찾을 수 없습니다.")
     
-    return {"profile": profile}
+    return {"profile": profile, "store": "postgresql" if settings.USE_LANGCHAIN_STORE else "chromadb"}
 
 
 @app.get("/history/{nickname}")

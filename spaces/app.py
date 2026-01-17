@@ -445,18 +445,18 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     async def on_start_or_reset(nickname, is_locked):
         """시작하기/재설정 버튼 클릭 핸들러"""
         if is_locked:
-            # 재설정 모드
+            # 재설정 모드 - 모든 필드 초기화
             return (
                 gr.update(visible=False),  # greeting_output
                 [],  # chatbot
                 gr.update(value="", interactive=True, info="채팅 시작 전 닉네임을 입력해주세요"),  # nickname_input 해제
                 gr.update(value="시작하기", variant="primary"),  # start_btn 복원
                 False,  # nickname_locked = False
-                gr.update(),  # profile_name
-                gr.update(),  # profile_age
-                gr.update(),  # profile_conditions
-                gr.update(),  # profile_emergency
-                gr.update(),  # profile_notes
+                gr.update(value=""),  # profile_name 초기화
+                gr.update(value=0),  # profile_age 초기화
+                gr.update(value=""),  # profile_conditions 초기화
+                gr.update(value=""),  # profile_emergency 초기화
+                gr.update(value=""),  # profile_notes 초기화
             )
         else:
             # 시작 모드
@@ -495,6 +495,15 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
         return await get_routine_info(nickname)
     
     start_btn.click(
+        fn=on_start_or_reset,
+        inputs=[nickname_input, nickname_locked],
+        outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked,
+                 profile_name, profile_age, profile_conditions, profile_emergency, profile_notes],
+        api_name=False
+    )
+    
+    # 닉네임 입력 후 엔터 → 시작하기 버튼과 동일 동작
+    nickname_input.submit(
         fn=on_start_or_reset,
         inputs=[nickname_input, nickname_locked],
         outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked,
