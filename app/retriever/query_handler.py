@@ -274,8 +274,10 @@ class RAGQueryHandler:
         else:
             time_of_day = "저녁"
         
-        # 최근 활동 조회
-        recent_activities = self._chroma.get_recent_activities(nickname, hours=48)
+        # 최근 활동 조회 (ChromaDB 사용 시에만)
+        recent_activities = []
+        if self._chroma:
+            recent_activities = self._chroma.get_recent_activities(nickname, hours=48)
         
         # 개인화된 인사말 생성
         previous_activity_followup = ""
