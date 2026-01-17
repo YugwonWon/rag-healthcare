@@ -49,9 +49,11 @@ env/
 tests/
 *_test.py
 
-# Finetuning outputs (대용량)
-outputs/
-finetuning/
+# Finetuning outputs (대용량) - 배포용 모델만 포함
+finetuning/output/*/checkpoint*/
+finetuning/output/*/runs/
+finetuning/*.py
+finetuning/requirements.txt
 
 # 로컬 모델 파일 (대용량 GGUF)
 models/
