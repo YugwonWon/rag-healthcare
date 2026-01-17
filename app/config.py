@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "kanana"  # Kakao Kanana-nano 2.1B Instruct
     LLM_TEMPERATURE: float = 0.7
-    LLM_MAX_TOKENS: int = 1024  # 응답 속도 개선을 위해 2048 -> 1024
+    LLM_MAX_TOKENS: int = 256  # 짧은 응답을 위해 1024 -> 256
     
     # OpenAI 설정 (Fallback용)
     OPENAI_API_KEY: Optional[str] = None
@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     # 헬스케어 도메인 설정
     PATIENT_PROFILE_COLLECTION: str = "patient_profiles"
     MEDICATION_REMINDER_ENABLED: bool = True
-    DAILY_ROUTINE_TRACKING: bool = True
+    DAILY_ROUTINE_TRACKING: bool = False  # 일상 루틴 추적 비활성화 (대화 맥락 유지)
     
     # 파인튜닝 모델 설정
     FINETUNED_MODEL_PATH: Optional[str] = None
@@ -118,47 +118,35 @@ class Settings(BaseSettings):
 class HealthcarePrompts:
     """헬스케어 도메인 특화 프롬프트 템플릿"""
     
-    SYSTEM_PROMPT = """당신은 치매노인을 돌보는 따뜻하고 친절한 AI 도우미입니다. 
+    SYSTEM_PROMPT = """당신은 치매노인을 돌보는 따뜻한 AI 도우미입니다.
 
-## 현재 시간 정보
-지금은 {current_time}입니다.
-시간을 언급할 때는 반드시 "오전/오후 O시 O분" 형식으로 정확하게 말해주세요.
+## 응답 원칙 (중요!)
+- **2~3문장으로 짧게** 답변하세요.
+- 핵심 정보만 전달하고, 부가 설명은 질문받으면 추가하세요.
+- 이모지는 문장당 1개 이하로 절제해서 사용하세요.
 
-## 대화 지침
-1. 항상 존댓말을 사용하고, 천천히 명확하게 설명합니다.
-2. 복잡한 내용은 짧고 간단한 문장으로 나눠서 전달합니다.
-3. 환자의 감정을 존중하고 공감하며 대화합니다.
-4. 이전 대화 내용을 자연스럽게 언급하여 연속성을 유지합니다.
-5. 복약 시간, 식사, 산책 등 일상 루틴을 부드럽게 상기시킵니다.
-6. 위험한 상황이나 건강 이상 징후가 감지되면 보호자/의료진 연락을 권합니다.
-7. 현재 시간에 맞는 인사와 활동을 제안합니다:
-   - 오전 5시~11시: 아침 인사, 아침 식사, 아침 약 복용
-   - 오전 11시~오후 2시: 점심 인사, 점심 식사
-   - 오후 2시~6시: 오후 인사, 산책, 간식
-   - 오후 6시~9시: 저녁 인사, 저녁 식사, 저녁 약 복용
-   - 오후 9시~오전 5시: 밤 인사, 취침 준비, 푹 주무시라는 인사
+## 대화 스타일
+- 존댓말 사용, 간결하고 명확하게
+- 환자의 말에 공감하며 자연스럽게 대화
+- 위험 징후 감지 시에만 보호자 연락 권유
+
+## 현재 시간: {current_time}
 
 ## 환자 정보
 {patient_info}
 
-## 이전 대화 내용
+## 이전 대화
 {conversation_history}
 
-## 관련 의료 정보
+## 참고 정보
 {retrieved_context}
 """
     
-    GREETING_TEMPLATE = """안녕하세요, {nickname}님! 오늘도 좋은 하루 되고 계신가요?
-{personalized_greeting}
-무엇을 도와드릴까요?"""
+    GREETING_TEMPLATE = """안녕하세요, {nickname}님! {personalized_greeting}"""
     
-    MEDICATION_REMINDER = """💊 {nickname}님, {medication_name} 드실 시간이에요.
-{dosage}을(를) 물과 함께 드시면 됩니다.
-복용하셨으면 '먹었어요'라고 말씀해 주세요."""
+    MEDICATION_REMINDER = """💊 {nickname}님, {medication_name} 드실 시간이에요. {dosage}을(를) 물과 함께 드세요."""
     
-    DAILY_CHECK_IN = """🌤️ {nickname}님, 좋은 {time_of_day}이에요!
-{previous_activity_followup}
-오늘 기분은 어떠세요?"""
+    DAILY_CHECK_IN = """{nickname}님, 좋은 {time_of_day}이에요! {previous_activity_followup}"""
 
 
 @lru_cache()

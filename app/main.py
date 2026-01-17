@@ -221,8 +221,10 @@ async def chat(
         # 3. 복약 알림 확인
         med_reminders = medication_reminder.check_and_send_reminders(request.nickname)
         
-        # 4. 루틴 상태
-        routine_status = routine_manager.generate_routine_message(request.nickname)
+        # 4. 루틴 상태 (설정에서 활성화된 경우에만)
+        routine_status = None
+        if settings.DAILY_ROUTINE_TRACKING:
+            routine_status = routine_manager.generate_routine_message(request.nickname)
         
         # 5. 위험 증상 감지 시 경고 추가
         if symptom_analysis.get("needs_attention"):
@@ -256,7 +258,11 @@ async def get_greeting(
     """
     try:
         greeting = await handler.generate_greeting(request.nickname)
-        suggestions = routine_manager.get_activity_suggestions(request.nickname)
+        
+        # 루틴 추적 활성화된 경우에만 제안 생성
+        suggestions = []
+        if settings.DAILY_ROUTINE_TRACKING:
+            suggestions = routine_manager.get_activity_suggestions(request.nickname)
         
         return GreetingResponse(
             greeting=greeting,
