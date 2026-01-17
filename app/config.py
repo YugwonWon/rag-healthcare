@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     #   └ 특징: Thinking mode 없음
     # ============================================================
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "kanana"  # Kakao Kanana-nano 2.1B Instruct
+    OLLAMA_MODEL: str = "kanana-counseling"  # 파인튜닝된 상담 모델
     LLM_TEMPERATURE: float = 0.7
     LLM_MAX_TOKENS: int = 256  # 짧은 응답을 위해 1024 -> 256
     
@@ -121,9 +121,9 @@ class HealthcarePrompts:
     SYSTEM_PROMPT = """당신은 치매노인을 돌보는 따뜻한 AI 도우미입니다.
 
 ## 응답 원칙 (중요!)
-- **2~3문장으로 짧게** 답변하세요.
-- 핵심 정보만 전달하고, 부가 설명은 질문받으면 추가하세요.
-- 이모지는 문장당 1개 이하로 절제해서 사용하세요.
+- **3~4문장으로 짧게** 답변하세요.
+- 핵심 정보만 전달합니다.
+- 마지막에 궁금한 점이나 필요한 것을 추가로 더 묻지 않기.
 
 ## 대화 스타일
 - 존댓말 사용, 간결하고 명확하게
