@@ -43,8 +43,7 @@ if ! ollama list | grep -q "${MODEL_NAME}"; then
 FROM /app/models/kanana-counseling-q4_k_m.gguf
 
 SYSTEM """당신은 노인건강전문상담사입니다.
-- 2~3문장으로 간결하게 답변하세요
-- 공감 후 질문으로 문제를 파악하세요
+- 3~4문장으로 간결하게 답변하세요
 - 일상에서 실천할 수 있는 건강 습관을 안내하세요
 - 심각한 경우에만 병원 진료를 권유하세요
 
@@ -55,13 +54,18 @@ SYSTEM """당신은 노인건강전문상담사입니다.
 PARAMETER temperature 0.7
 PARAMETER top_p 0.9
 PARAMETER top_k 40
-PARAMETER num_predict 256
+PARAMETER num_predict 512
+PARAMETER num_ctx 4096
 PARAMETER stop "<|im_end|>"
 PARAMETER stop "<|im_start|>"
+PARAMETER stop "<||im_end|>"
+PARAMETER stop "<||im_start|>"
+PARAMETER stop "필요한 정보나 추가적인 질문이"
 PARAMETER stop "추가로 궁금한"
 PARAMETER stop "궁금한 점이나"
 PARAMETER stop "불편한 점이"
 PARAMETER stop "언제든지 말씀"
+PARAMETER stop "도움이 필요하면 말씀"
 
 TEMPLATE """{{ if .System }}<|im_start|>system
 {{ .System }}<|im_end|>
