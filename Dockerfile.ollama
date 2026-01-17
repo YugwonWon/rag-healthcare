@@ -22,13 +22,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 시스템 의존성 설치 (Ollama 실행에 필요 + 로케일)
+# 시스템 의존성 설치 (Ollama 실행에 필요 + 로케일 + zstd)
 # 참고: 한글 로케일은 Cloud Run에서 필수가 아니며, UTF-8만 있으면 충분함
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     ca-certificates \
     locales \
+    zstd \
     && echo "en_US.UTF-8 UTF-8" > /etc/locale.gen \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
@@ -58,8 +59,11 @@ COPY app/ ./app/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
 
+# Finetuned 모델 GGUF 파일 복사 (kanana-counseling)
+COPY finetuning/output/kanana-counseling-merged/kanana-counseling-q4_k_m.gguf ./models/
+
 # 디렉토리 생성 및 스크립트 권한
-RUN mkdir -p /app/logs /app/models && \
+RUN mkdir -p /app/logs && \
     chmod +x ./scripts/start_with_ollama.sh
 
 # 포트 노출
