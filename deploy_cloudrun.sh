@@ -12,7 +12,7 @@ fi
 PROJECT_ID="${GCP_PROJECT_ID:-rag-healthcare-483412}"
 REGION="${GCP_REGION:-asia-northeast3}"
 SERVICE_NAME="${SERVICE_NAME:-healthcare-rag-chatbot}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:3b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-kanana-counseling}"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
 
 # 색상 출력
@@ -27,12 +27,13 @@ echo "  리전: ${REGION}"
 echo "  서비스: ${SERVICE_NAME}"
 echo "  모델: ${OLLAMA_MODEL}"
 
-# 1. Cloud Build로 이미지 빌드 + GCR 푸시 (로컬 저장 없음)
-# Ollama 포함 Dockerfile 사용
-echo -e "\n${YELLOW}📦 Cloud Build로 이미지 빌드 중... (Ollama 포함, 로컬 저장 없음)${NC}"
-gcloud builds submit \
-    --config=cloudbuild.yaml \
-    --project ${PROJECT_ID}
+# 1. 로컬에서 Docker 빌드 (캐시 활용)
+echo -e "\n${YELLOW}📦 로컬에서 Docker 이미지 빌드 중... (캐시 활용)${NC}"
+docker build -t ${IMAGE_NAME}:latest -f Dockerfile.ollama .
+
+# 2. GCR에 푸시
+echo -e "\n${YELLOW}📤 GCR에 이미지 푸시 중...${NC}"
+docker push ${IMAGE_NAME}:latest
 
 # 3. Cloud Run 배포
 # LLM 내부 실행 (Ollama + Qwen2.5:3b)
@@ -62,7 +63,11 @@ gcloud run deploy ${SERVICE_NAME} \
     --set-secrets "DB_PASSWORD=db-password:latest" \
     --project ${PROJECT_ID}
 
-# 4. 서비스 URL 확인
+# 4. 로컬 이미지 삭제 (디스크 절약)
+echo -e "\n${YELLOW}🗑️ 로컬 이미지 삭제 중...${NC}"
+docker rmi ${IMAGE_NAME}:latest 2>/dev/null || true
+
+# 5. 서비스 URL 확인
 echo -e "\n${GREEN}✅ 배포 완료!${NC}"
 SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME} \
     --platform managed \

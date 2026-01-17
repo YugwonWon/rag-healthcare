@@ -1,5 +1,7 @@
 data/chroma
 models/
+finetuning/output
+finetuning/data
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

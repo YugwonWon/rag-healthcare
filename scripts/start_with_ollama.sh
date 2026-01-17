@@ -26,11 +26,60 @@ for i in {1..60}; do
 done
 
 # 모델 확인 및 다운로드
+# kanana-counseling = finetuned 모델 (로컬 GGUF 파일 사용)
 # kanana = kakaocorp/kanana-nano-2.1b-instruct (HuggingFace GGUF: ch00n/kanana-nano-2.1b-instruct-Q4_K_M-GGUF)
-MODEL_NAME="${OLLAMA_MODEL:-kanana}"
+MODEL_NAME="${OLLAMA_MODEL:-kanana-counseling}"
 echo "📦 Checking model: ${MODEL_NAME}..."
 
 if ! ollama list | grep -q "${MODEL_NAME}"; then
+    # kanana-counseling (finetuned 모델) - 로컬 GGUF 파일 사용
+    if [ "${MODEL_NAME}" = "kanana-counseling" ]; then
+        echo "📝 Registering finetuned model: ${MODEL_NAME}..."
+        GGUF_PATH="/app/models/kanana-counseling-q4_k_m.gguf"
+        
+        if [ -f "${GGUF_PATH}" ]; then
+            # Modelfile 생성 및 등록
+            cat > /tmp/Modelfile.${MODEL_NAME} << 'EOF'
+FROM /app/models/kanana-counseling-q4_k_m.gguf
+
+SYSTEM """당신은 노인건강전문상담사입니다.
+- 2~3문장으로 간결하게 답변하세요
+- 공감 후 질문으로 문제를 파악하세요
+- 일상에서 실천할 수 있는 건강 습관을 안내하세요
+- 심각한 경우에만 병원 진료를 권유하세요
+
+[금지사항]
+절대로 "추가로 궁금한 점이나 불편한 점이 있으시면 언제든지 말씀해 주세요"라고 말하지 마세요.
+마무리 인사 없이 핵심 내용만 전달하세요."""
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER num_predict 256
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "추가로 궁금한"
+PARAMETER stop "궁금한 점이나"
+PARAMETER stop "불편한 점이"
+PARAMETER stop "언제든지 말씀"
+
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>
+"""
+EOF
+            ollama create ${MODEL_NAME} -f /tmp/Modelfile.${MODEL_NAME}
+            echo "✅ ${MODEL_NAME} model registered!"
+        else
+            echo "❌ GGUF file not found: ${GGUF_PATH}"
+            echo "   Falling back to base kanana model..."
+            MODEL_NAME="kanana"
+        fi
+    fi
+    
     # kanana 모델은 HuggingFace에서 GGUF 다운로드 후 등록
     if [ "${MODEL_NAME}" = "kanana" ]; then
         echo "⬇️ Downloading kanana-nano-2.1b-instruct from HuggingFace..."
@@ -64,8 +113,8 @@ EOF
         echo "📝 Registering ${MODEL_NAME} model with Ollama..."
         ollama create ${MODEL_NAME} -f /tmp/Modelfile.${MODEL_NAME}
         echo "✅ ${MODEL_NAME} model registered!"
-    else
-        # 일반 Ollama 모델 pull
+    elif [ "${MODEL_NAME}" != "kanana-counseling" ]; then
+        # 일반 Ollama 모델 pull (kanana, kanana-counseling이 아닌 경우)
         echo "⬇️ Pulling model: ${MODEL_NAME} (this may take a while on first run)..."
         echo "   Progress logs suppressed. Please wait..."
         # 3번 재시도 (진행 상황 로그 숨김)
