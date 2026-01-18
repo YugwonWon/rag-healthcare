@@ -264,6 +264,97 @@ class LangChainDataStore:
             logger.error(f"대화 삭제 오류: {e}")
             return 0
     
+    def get_conversation_count(self, nickname: str) -> int:
+        """대화 수 조회 (user+assistant 쌍 기준)"""
+        if not self._use_postgres:
+            return 0
+        try:
+            history = self.get_chat_history(nickname)
+            return len(history.messages) // 2
+        except Exception as e:
+            logger.error(f"대화 수 조회 오류: {e}")
+            return 0
+    
+    # ==========================================
+    # 대화 요약 관리
+    # ==========================================
+    
+    async def get_conversation_summary(self, nickname: str) -> Optional[str]:
+        """저장된 대화 요약 조회"""
+        if not self._use_postgres:
+            return None
+        try:
+            async with self.get_connection() as conn:
+                row = await conn.fetchrow(
+                    """SELECT summary, summarized_count FROM conversation_summaries 
+                       WHERE nickname = $1 ORDER BY updated_at DESC LIMIT 1""",
+                    nickname
+                )
+                if row:
+                    return {
+                        "summary": row["summary"],
+                        "summarized_count": row["summarized_count"]
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"요약 조회 오류: {e}")
+            return None
+    
+    async def save_conversation_summary(self, nickname: str, summary: str, summarized_count: int) -> bool:
+        """대화 요약 저장"""
+        if not self._use_postgres:
+            return False
+        try:
+            async with self.get_connection() as conn:
+                await conn.execute("""
+                    INSERT INTO conversation_summaries (nickname, summary, summarized_count, updated_at)
+                    VALUES ($1, $2, $3, NOW())
+                    ON CONFLICT (nickname) DO UPDATE SET
+                        summary = EXCLUDED.summary,
+                        summarized_count = EXCLUDED.summarized_count,
+                        updated_at = NOW()
+                """, nickname, summary, summarized_count)
+                logger.info(f"대화 요약 저장: {nickname}, {summarized_count}개 대화 요약")
+                return True
+        except Exception as e:
+            logger.error(f"요약 저장 오류: {e}")
+            return False
+    
+    def get_conversations_for_summary(self, nickname: str, start_idx: int = 0, end_idx: int = 10) -> list[dict]:
+        """요약할 대화 범위 조회 (오래된 것부터)"""
+        if not self._use_postgres:
+            return []
+        try:
+            history = self.get_chat_history(nickname)
+            messages = history.messages[start_idx*2:end_idx*2]  # user+ai 쌍
+            return [
+                {"role": "user" if m.type == "human" else "assistant", "content": m.content}
+                for m in messages
+            ]
+        except Exception as e:
+            logger.error(f"요약용 대화 조회 오류: {e}")
+            return []
+    
+    async def should_summarize(self, nickname: str, threshold: int = 10) -> bool:
+        """요약이 필요한지 확인 (threshold개 이상의 새 대화가 쌓이면 True)"""
+        if not self._use_postgres:
+            return False
+        
+        try:
+            current_count = self.get_conversation_count(nickname)
+            summary_info = await self.get_conversation_summary(nickname)
+            
+            if summary_info:
+                # 이미 요약된 대화 수 이후로 threshold개 이상 새 대화가 있으면
+                new_conversations = current_count - summary_info["summarized_count"]
+                return new_conversations >= threshold
+            else:
+                # 요약이 없으면 threshold개 이상일 때
+                return current_count >= threshold
+        except Exception as e:
+            logger.error(f"요약 필요 여부 확인 오류: {e}")
+            return False
+
     # ==========================================
     # 프로필 관리 (직접 SQL)
     # ==========================================
@@ -387,6 +478,18 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 -- 프로필 인덱스
 CREATE INDEX IF NOT EXISTS idx_profiles_updated ON profiles(updated_at DESC);
+
+-- 대화 요약 테이블
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    nickname VARCHAR(100) PRIMARY KEY,
+    summary TEXT NOT NULL,
+    summarized_count INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- 요약 인덱스
+CREATE INDEX IF NOT EXISTS idx_summaries_updated ON conversation_summaries(updated_at DESC);
 
 -- chat_history 테이블은 LangChain이 자동 생성
 -- langchain_pg_embedding 테이블도 LangChain이 자동 생성

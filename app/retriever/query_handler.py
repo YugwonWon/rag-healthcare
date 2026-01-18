@@ -100,15 +100,17 @@ class RAGQueryHandler:
         retrieved_context = self._format_retrieved_context(doc_results)
         logger.debug(f"문서 검색 완료 | 결과 수={len(doc_results) if isinstance(doc_results, list) else len(doc_results.get('documents', [[]])[0])}")
         
-        # 3. 대화 기록 조회 (개인화) - 최근 3개로 제한하여 응답 속도 개선
+        # 3. 대화 기록 조회 (개인화) - 요약 + 최근 대화
         conversation_history = ""
         activity_context = ""
         if include_history:
-            conv_results = self._get_conversations(nickname, query, n_results=3)
-            conversation_history = self._format_conversation_history(conv_results)
-            
-            # 최근 활동 요약 추가 (ChromaDB 전용, LangChain은 추후 지원)
-            if not self._use_langchain:
+            # LangChain: 요약 + 최근 대화 결합
+            if self._use_langchain:
+                conversation_history = await self._get_conversation_with_summary(nickname)
+            else:
+                # ChromaDB: 기존 방식
+                conv_results = self._get_conversations(nickname, query, n_results=3)
+                conversation_history = self._format_conversation_history(conv_results)
                 activity_summary = self._chroma.get_user_activity_summary(nickname, hours=24)
                 activity_context = self._format_activity_summary(activity_summary)
         
@@ -205,6 +207,137 @@ class RAGQueryHandler:
                 metadata=metadata
             )
     
+    # ==========================================
+    # 대화 요약 관련 메서드
+    # ==========================================
+    
+    async def _get_conversation_with_summary(self, nickname: str) -> str:
+        """
+        요약 + 최근 대화를 결합하여 반환
+        
+        전략:
+        1. 저장된 요약이 있으면 가져옴
+        2. 요약 이후의 최근 대화(최대 5개)를 추가
+        3. 10번 대화마다 백그라운드에서 요약 갱신
+        """
+        if not self._use_langchain:
+            return ""
+        
+        try:
+            # 저장된 요약 조회
+            summary_info = await self._store.get_conversation_summary(nickname)
+            
+            # 최근 대화 조회 (요약 이후 대화 + 직전 몇개)
+            recent_convs = self._store.get_recent_conversations(nickname, limit=5)
+            recent_history = self._format_conversation_history(recent_convs)
+            
+            # 요약이 있으면 결합
+            if summary_info and summary_info.get("summary"):
+                combined = f"[이전 대화 요약]\n{summary_info['summary']}\n\n[최근 대화]\n{recent_history}"
+            else:
+                combined = recent_history
+            
+            # 요약 필요 여부 확인 및 백그라운드 요약 실행
+            should_summarize = await self._store.should_summarize(nickname, threshold=10)
+            if should_summarize:
+                # 비동기로 요약 생성 (응답 블로킹 없음)
+                import asyncio
+                asyncio.create_task(self._generate_and_save_summary(nickname))
+                logger.info(f"백그라운드 요약 시작: {nickname}")
+            
+            return combined
+            
+        except Exception as e:
+            logger.error(f"대화+요약 조회 오류: {e}")
+            # 폴백: 최근 대화만 반환
+            recent_convs = self._store.get_recent_conversations(nickname, limit=3)
+            return self._format_conversation_history(recent_convs)
+    
+    async def _generate_and_save_summary(self, nickname: str):
+        """
+        이전 대화를 요약하여 저장
+        
+        LLM을 사용해 오래된 대화를 요약하고 DB에 저장
+        """
+        if not self._use_langchain:
+            return
+        
+        try:
+            # 기존 요약 정보 조회
+            summary_info = await self._store.get_conversation_summary(nickname)
+            start_idx = 0
+            if summary_info:
+                start_idx = summary_info.get("summarized_count", 0)
+            
+            # 현재 총 대화 수
+            total_count = self._store.get_conversation_count(nickname)
+            
+            # 요약할 대화 범위 (start_idx ~ total_count - 5)
+            # 최근 5개는 요약하지 않고 그대로 유지
+            end_idx = max(start_idx, total_count - 5)
+            
+            if end_idx <= start_idx:
+                logger.debug(f"요약할 새 대화 없음: {nickname}")
+                return
+            
+            # 요약할 대화 조회
+            conversations_to_summarize = self._store.get_conversations_for_summary(
+                nickname, start_idx, end_idx
+            )
+            
+            if not conversations_to_summarize:
+                return
+            
+            # 기존 요약 포함하여 새 요약 생성
+            old_summary = summary_info.get("summary", "") if summary_info else ""
+            new_summary = await self._summarize_conversations(
+                conversations_to_summarize, 
+                old_summary
+            )
+            
+            # 요약 저장
+            await self._store.save_conversation_summary(
+                nickname, 
+                new_summary, 
+                end_idx
+            )
+            logger.info(f"대화 요약 완료: {nickname}, {end_idx}개 대화 요약됨")
+            
+        except Exception as e:
+            logger.error(f"요약 생성/저장 오류: {e}")
+    
+    async def _summarize_conversations(self, conversations: list[dict], old_summary: str = "") -> str:
+        """
+        LLM을 사용해 대화 내용 요약
+        """
+        # 대화 포맷팅
+        conv_text = ""
+        for conv in conversations:
+            role = "사용자" if conv["role"] == "user" else "상담사"
+            conv_text += f"{role}: {conv['content']}\n"
+        
+        # 요약 프롬프트
+        prompt = f"""다음은 어르신과 건강 상담사의 대화 기록입니다. 
+핵심 내용을 3-4문장으로 간결하게 요약해주세요.
+어르신의 건강 상태, 주요 고민, 상담 내용을 중심으로 요약합니다.
+
+{f"[이전 요약]{chr(10)}{old_summary}{chr(10)}{chr(10)}" if old_summary else ""}[새 대화]
+{conv_text}
+
+요약:"""
+        
+        try:
+            messages = [
+                {"role": "system", "content": "당신은 대화 내용을 요약하는 도우미입니다. 간결하고 핵심적인 내용만 요약합니다."},
+                {"role": "user", "content": prompt}
+            ]
+            summary = await self._llm.chat(messages)
+            return summary.strip()
+        except Exception as e:
+            logger.error(f"LLM 요약 오류: {e}")
+            # 폴백: 단순 요약
+            return f"최근 상담 내용: {len(conversations)//2}회 대화 진행"
+
     def _preprocess_query(self, query: str) -> Dict[str, Any]:
         """NER + N-gram 기반 쿼리 전처리
         

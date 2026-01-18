@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     CONVERSATION_COLLECTION_NAME: str = "conversations"
     MAX_CONVERSATION_HISTORY: int = 10
     
+    # 대화 요약 설정
+    CONVERSATION_SUMMARY_THRESHOLD: int = 10  # 요약 생성 기준 대화 수
+    CONVERSATION_SUMMARY_ENABLED: bool = True  # 요약 기능 활성화 여부
+    
     # RAG 설정
     RAG_TOP_K: int = 5
     RAG_SIMILARITY_THRESHOLD: float = 0.5
