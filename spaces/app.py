@@ -288,25 +288,38 @@ async def save_patient_profile(
     age: int,
     conditions: str,
     emergency_contact: str,
-    notes: str
+    notes: str,
+    health_consent: bool = False
 ) -> str:
-    """환자 프로필 저장"""
+    """환자 프로필 저장 (건강정보 동의 여부 반영)"""
     if not nickname.strip():
         return "닉네임을 먼저 입력해주세요."
     
-    result = await call_api("/profile", "POST", {
+    # 동의하지 않은 경우 건강 관련 정보는 저장하지 않음
+    profile_data = {
         "nickname": nickname,
         "name": name or None,
         "age": age if age > 0 else None,
-        "conditions": conditions or None,
         "emergency_contact": emergency_contact or None,
-        "notes": notes or None
-    })
+        "health_info_consent": health_consent,
+    }
+    
+    if health_consent:
+        # 동의한 경우에만 건강 상태/질환, 특이사항 저장
+        profile_data["conditions"] = conditions or None
+        profile_data["notes"] = notes or None
+    else:
+        # 동의하지 않으면 건강정보 필드를 비움
+        profile_data["conditions"] = None
+        profile_data["notes"] = None
+    
+    result = await call_api("/profile", "POST", profile_data)
     
     if "error" in result:
         return f"프로필 저장 실패: {result['error']}"
     
-    return f"✅ {nickname}님의 프로필이 저장되었습니다."
+    consent_status = "동의함 ✅" if health_consent else "동의하지 않음"
+    return f"✅ {nickname}님의 프로필이 저장되었습니다.\n📋 건강정보 개인화 활용: {consent_status}"
 
 
 # Gradio UI 테마 및 CSS
@@ -413,13 +426,39 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
         
         # 프로필 탭
         with gr.TabItem("👤 프로필 설정"):
+            # IRB 안내문 및 개인정보 동의
+            gr.Markdown(
+                """
+                ### 📋 연구 참여 안내(IRB 승인 연구)
+                
+                본 챗봇은 **고령자 건강관리 지원을 위한 연구** 목적으로 운영됩니다.
+                
+                - **연구기관**: (IRB 수정심의 진행 중)
+                - **목적**: 고령자 맞춤형 건강 정보 제공 챗봇의 효과성 검증
+                - **안내**: 본 챗봇은 연구 목적의 데모용으로 제작되었습니다. **의료적 진단, 약물 투약 관리, 개인화된 의료 처치를 제공하지 않습니다.**
+                  건강 관련 전문적인 상담은 반드시 의료 전문가와 상의하시기 바랍니다.
+                
+                > ⚠️ 아래 "건강정보 개인화 활용 동의"에 체크하시면, 입력하신 건강 상태와 특이사항이
+                > 대화 시 맞춤형 응답에 활용됩니다. 동의하지 않으셔도 챗봇 이용에는 제한이 없습니다.
+                """,
+                elem_classes=["info-box"]
+            )
+            
+            # 건강정보 개인화 활용 동의 체크박스
+            health_consent_checkbox = gr.Checkbox(
+                label="✅ 건강정보 개인화 활용에 동의합니다(선택사항)",
+                value=False,
+                info="동의 시 건강 상태/질환, 특이사항이 대화에 반영됩니다. 동의하지 않아도 서비스 이용이 가능합니다."
+            )
+            
             with gr.Row():
                 with gr.Column():
                     profile_name = gr.Textbox(label="이름")
                     profile_age = gr.Number(label="나이", minimum=0, maximum=120)
                     profile_conditions = gr.Textbox(
-                        label="건강 상태/질환",
-                        placeholder="예: 고혈압, 당뇨"
+                        label="건강 상태/질환(동의 시에만 저장됨)",
+                        placeholder="예: 고혈압, 당뇨",
+                        interactive=False
                     )
                 with gr.Column():
                     profile_emergency = gr.Textbox(
@@ -427,9 +466,10 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                         placeholder="예: 010-1234-5678 (아들)"
                     )
                     profile_notes = gr.Textbox(
-                        label="특이사항",
+                        label="특이사항(동의 시에만 저장됨)",
                         placeholder="예: 아침에 약 드시는 것 잊어버리심",
-                        lines=3
+                        lines=3,
+                        interactive=False
                     )
             
             with gr.Row():
@@ -437,6 +477,20 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                 delete_history_btn = gr.Button("🗑️ 이전 대화 기록 삭제", variant="stop")
             
             profile_status = gr.Markdown()
+            
+            # 동의 체크박스 변경 시 건강정보 입력 필드 활성화/비활성화
+            def toggle_health_fields(consent):
+                return (
+                    gr.update(interactive=consent),  # profile_conditions
+                    gr.update(interactive=consent),  # profile_notes
+                )
+            
+            health_consent_checkbox.change(
+                fn=toggle_health_fields,
+                inputs=[health_consent_checkbox],
+                outputs=[profile_conditions, profile_notes],
+                api_name=False
+            )
     
     # 이벤트 핸들러
     # 상태 변수 (닉네임 잠금 여부)
@@ -457,6 +511,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                 gr.update(value=""),  # profile_conditions 초기화
                 gr.update(value=""),  # profile_emergency 초기화
                 gr.update(value=""),  # profile_notes 초기화
+                gr.update(value=False),  # health_consent_checkbox 초기화
             )
         else:
             # 시작 모드
@@ -472,10 +527,12 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                     gr.update(),
                     gr.update(),
                     gr.update(),
+                    gr.update(),
                 )
             greeting = await get_greeting(nickname)
             # 저장된 프로필 불러오기
             profile = await get_profile(nickname)
+            has_consent = profile.get("health_info_consent", False)
             return (
                 gr.update(value=greeting, visible=True),  # greeting_output
                 [],  # chatbot
@@ -484,9 +541,10 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                 True,  # nickname_locked = True
                 gr.update(value=profile.get("name", "")),  # profile_name
                 gr.update(value=profile.get("age", 0) or 0),  # profile_age
-                gr.update(value=profile.get("conditions", "")),  # profile_conditions
+                gr.update(value=profile.get("conditions", ""), interactive=has_consent),  # profile_conditions
                 gr.update(value=profile.get("emergency_contact", "")),  # profile_emergency
-                gr.update(value=profile.get("notes", "")),  # profile_notes
+                gr.update(value=profile.get("notes", ""), interactive=has_consent),  # profile_notes
+                gr.update(value=has_consent),  # health_consent_checkbox
             )
     
     async def on_routine_refresh(nickname):
@@ -498,7 +556,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
         fn=on_start_or_reset,
         inputs=[nickname_input, nickname_locked],
         outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked,
-                 profile_name, profile_age, profile_conditions, profile_emergency, profile_notes],
+                 profile_name, profile_age, profile_conditions, profile_emergency, profile_notes,
+                 health_consent_checkbox],
         api_name=False
     )
     
@@ -507,7 +566,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
         fn=on_start_or_reset,
         inputs=[nickname_input, nickname_locked],
         outputs=[greeting_output, chatbot, nickname_input, start_btn, nickname_locked,
-                 profile_name, profile_age, profile_conditions, profile_emergency, profile_notes],
+                 profile_name, profile_age, profile_conditions, profile_emergency, profile_notes,
+                 health_consent_checkbox],
         api_name=False
     )
     
@@ -557,7 +617,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             profile_age,
             profile_conditions,
             profile_emergency,
-            profile_notes
+            profile_notes,
+            health_consent_checkbox
         ],
         outputs=[profile_status],
         api_name=False
