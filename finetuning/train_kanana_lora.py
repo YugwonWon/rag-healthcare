@@ -4,9 +4,16 @@ Kanana 모델 LoRA 파인튜닝 스크립트
 
 사용법:
     python train_kanana_lora.py --epochs 3 --batch_size 2
+    python train_kanana_lora.py --cpu --epochs 3  # CPU 모드
 """
 
 import os
+import sys
+
+# CPU 모드 체크 (--cpu 인자가 있으면 CUDA 비활성화)
+if "--cpu" in sys.argv:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import json
 import argparse
 from pathlib import Path
@@ -82,15 +89,16 @@ def main():
     parser.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout")
     
     # 학습 설정
-    parser.add_argument("--epochs", type=int, default=3, help="에포크 수")
+    parser.add_argument("--epochs", type=int, default=7, help="에포크 수 (소량 데이터는 5-10 권장)")
     parser.add_argument("--batch_size", type=int, default=2, help="배치 크기")
-    parser.add_argument("--learning_rate", type=float, default=2e-4, help="학습률")
+    parser.add_argument("--learning_rate", type=float, default=1e-4, help="학습률 (소량 데이터는 5e-5~2e-4 권장)")
     parser.add_argument("--max_seq_length", type=int, default=1024, help="최대 시퀀스 길이")
     parser.add_argument("--gradient_accumulation", type=int, default=4, help="그래디언트 누적")
     
     # 양자화
-    parser.add_argument("--use_4bit", action="store_true", default=True, help="4비트 양자화 (QLoRA)")
+    parser.add_argument("--use_4bit", action="store_true", help="4비트 양자화 (QLoRA)")
     parser.add_argument("--use_8bit", action="store_true", help="8비트 양자화")
+    parser.add_argument("--cpu", action="store_true", help="CPU로 학습 (양자화 없음)")
     
     args = parser.parse_args()
     
@@ -116,7 +124,11 @@ def main():
     
     # 2. 양자화 설정
     bnb_config = None
-    if args.use_4bit:
+    device_map = None  # CPU에서는 device_map 사용 안함
+    
+    if args.cpu:
+        print("🖥️ CPU 모드로 실행...")
+    elif args.use_4bit:
         print("🔧 4비트 양자화 (QLoRA) 설정...")
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -124,18 +136,20 @@ def main():
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
+        device_map = "auto"
     elif args.use_8bit:
         print("🔧 8비트 양자화 설정...")
         bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+        device_map = "auto"
     
     # 3. 모델 로드
     print(f"\n🤖 모델 로드 중: {args.model_name}")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=device_map,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16 if not bnb_config else None,
+        torch_dtype=torch.float32 if args.cpu else (torch.bfloat16 if not bnb_config else None),
     )
     
     if bnb_config:
@@ -183,16 +197,18 @@ def main():
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation,
         learning_rate=args.learning_rate,
-        warmup_ratio=0.1,
+        warmup_ratio=0.15,
+        lr_scheduler_type="cosine",
         logging_steps=10,
         save_strategy="epoch",
         eval_strategy="epoch" if val_dataset else "no",
         fp16=False,
-        bf16=True,
+        bf16=not args.cpu,  # CPU에서는 bf16 비활성화
         max_length=args.max_seq_length,
         dataset_text_field="text",
         report_to="none",
         seed=42,
+        use_cpu=args.cpu,  # CPU 모드
     )
     
     # 7. 트레이너 생성

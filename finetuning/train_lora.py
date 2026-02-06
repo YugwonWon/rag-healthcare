@@ -51,11 +51,11 @@ class ModelArguments:
 class DataArguments:
     """데이터 관련 인자"""
     train_data_path: str = field(
-        default="./data/conversations/train_chat.jsonl",
+        default="./data/healthcare_conversations_train.jsonl",
         metadata={"help": "학습 데이터 경로"}
     )
     val_data_path: Optional[str] = field(
-        default="./data/conversations/val_chat.jsonl",
+        default="./data/healthcare_conversations_valid.jsonl",
         metadata={"help": "검증 데이터 경로"}
     )
     max_seq_length: int = field(
@@ -291,8 +291,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_8bit", action="store_true", default=False)
     
     # 데이터 인자
-    parser.add_argument("--train_data", type=str, default="./data/conversations/train_chat.jsonl")
-    parser.add_argument("--val_data", type=str, default="./data/conversations/val_chat.jsonl")
+    parser.add_argument("--train_data", type=str, default="./data/healthcare_conversations_train.jsonl")
+    parser.add_argument("--val_data", type=str, default="./data/healthcare_conversations_valid.jsonl")
     parser.add_argument("--max_seq_length", type=int, default=2048)
     
     # LoRA 인자
