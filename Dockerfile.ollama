@@ -74,12 +74,34 @@ COPY models/ ./models/
 RUN mkdir -p /app/logs /app/ollama_models && \
     chmod +x ./scripts/start_with_ollama.sh
 
-# 포트 노출
-EXPOSE 8000
+# 포트 노출 (Cloud Run은 PORT=8080 주입)
+EXPOSE 8080
+
+# 빌드 시 모델 사전 등록 (Cold Start 시간 단축)
+# Ollama 서버를 잠시 띄우고, 모델 create 후 종료
+RUN if [ -f "./models/Modelfile.${OLLAMA_MODEL}" ]; then \
+        echo "📦 Pre-registering model: ${OLLAMA_MODEL}" && \
+        ollama serve &  \
+        sleep 3 && \
+        ollama create ${OLLAMA_MODEL} -f ./models/Modelfile.${OLLAMA_MODEL} && \
+        echo "✅ Model pre-registered!" && \
+        kill %1 2>/dev/null; \
+    elif [ -f "./models/${OLLAMA_MODEL}.gguf" ]; then \
+        echo "📦 Pre-registering model from GGUF: ${OLLAMA_MODEL}" && \
+        printf "FROM ./models/${OLLAMA_MODEL}.gguf\nSYSTEM \"당신은 노인건강전문상담사입니다.\"\nPARAMETER temperature 0.1\n" > /tmp/Modelfile.auto && \
+        ollama serve & \
+        sleep 3 && \
+        ollama create ${OLLAMA_MODEL} -f /tmp/Modelfile.auto && \
+        rm -f /tmp/Modelfile.auto && \
+        echo "✅ Model pre-registered!" && \
+        kill %1 2>/dev/null; \
+    else \
+        echo "⚠️ No local model files, will pull at runtime"; \
+    fi && sleep 2 || true
 
 # 헬스체크 (앱이 준비되면 /health 응답)
-HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=300s --retries=5 \
+    CMD curl -f http://localhost:${PORT:-8080}/health || exit 1
 
 # 시작 스크립트 실행 (Ollama 시작 → 모델 로드 → 앱 실행)
 CMD ["./scripts/start_with_ollama.sh"]
