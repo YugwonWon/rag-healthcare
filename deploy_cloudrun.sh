@@ -1,5 +1,11 @@
 #!/bin/bash
-# Cloud Run 배포 스크립트 (Cloud Build 사용 - 로컬 이미지 저장 없음)
+# Cloud Run 배포 스크립트 (범용 모델 지원)
+# .env의 OLLAMA_MODEL에 지정된 모델로 자동 배포
+#
+# 사전 준비:
+#   1. models/{OLLAMA_MODEL}.gguf 파일 배치
+#   2. models/Modelfile.{OLLAMA_MODEL} 템플릿 작성
+#   3. .env에 OLLAMA_MODEL=모델명 설정
 
 set -e
 
@@ -36,7 +42,6 @@ echo -e "\n${YELLOW}📤 GCR에 이미지 푸시 중...${NC}"
 docker push ${IMAGE_NAME}:latest
 
 # 3. Cloud Run 배포
-# LLM 내부 실행 (Ollama + Qwen2.5:3b)
 echo -e "\n${YELLOW}🌐 Cloud Run에 배포 중...${NC}"
 gcloud run deploy ${SERVICE_NAME} \
     --image ${IMAGE_NAME}:latest \
@@ -57,6 +62,7 @@ gcloud run deploy ${SERVICE_NAME} \
     --set-env-vars "OLLAMA_MODEL=${OLLAMA_MODEL}" \
     --set-env-vars "OLLAMA_BASE_URL=http://localhost:11434" \
     --set-env-vars "USE_LANGCHAIN_STORE=true" \
+    --set-env-vars "GRAPHRAG_ENABLED=true" \
     --set-env-vars "DB_HOST=/cloudsql/${PROJECT_ID}:${REGION}:healthcare-db" \
     --set-env-vars "DB_NAME=healthcare" \
     --set-env-vars "DB_USER=postgres" \

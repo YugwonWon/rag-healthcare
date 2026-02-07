@@ -1,9 +1,16 @@
 # 치매노인 맞춤형 헬스케어 RAG 챗봇 - Cloud Run 배포용 (Ollama 포함)
-# Ollama + Qwen2.5:3b를 컨테이너 내부에서 실행
+# 환경변수 OLLAMA_MODEL로 모델을 지정하면 자동으로 해당 모델을 등록/사용
+#
+# 사용법:
+#   docker build --build-arg OLLAMA_MODEL=k-exaone-counseling -t healthcare-rag .
+#   또는 deploy_cloudrun.sh 실행
 
 FROM python:3.12-slim
 
-# debconf 경고 방지 및 환경변수 설정
+# Build argument: 사용할 모델 이름 (기본값: k-exaone-counseling)
+ARG OLLAMA_MODEL=k-exaone-counseling
+
+# 환경변수 설정
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -13,8 +20,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LOG_TO_CONSOLE=true \
     LOG_TO_FILE=true \
     OLLAMA_HOST=0.0.0.0:11434 \
-    OLLAMA_MODELS=/app/models \
+    OLLAMA_MODELS=/app/ollama_models \
     OLLAMA_BASE_URL=http://localhost:11434 \
+    OLLAMA_MODEL=${OLLAMA_MODEL} \
     OLLAMA_DEBUG=0 \
     OLLAMA_FLASH_ATTENTION=1 \
     PYTHONIOENCODING=utf-8
@@ -22,8 +30,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 시스템 의존성 설치 (Ollama 실행에 필요 + 로케일 + zstd)
-# 참고: 한글 로케일은 Cloud Run에서 필수가 아니며, UTF-8만 있으면 충분함
+# 시스템 의존성 + Ollama 설치
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -59,11 +66,12 @@ COPY app/ ./app/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
 
-# Finetuned 모델 GGUF 파일 복사 (kanana-counseling)
-COPY finetuning/output/kanana-counseling-merged/kanana-counseling-q4_k_m.gguf ./models/
+# 모델 디렉토리 복사 (GGUF + Modelfile 포함)
+# models/ 디렉토리에 {모델명}.gguf 와 Modelfile.{모델명} 이 있어야 함
+COPY models/ ./models/
 
 # 디렉토리 생성 및 스크립트 권한
-RUN mkdir -p /app/logs && \
+RUN mkdir -p /app/logs /app/ollama_models && \
     chmod +x ./scripts/start_with_ollama.sh
 
 # 포트 노출
