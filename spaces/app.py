@@ -79,7 +79,7 @@ print(f"📦 Gradio 버전: {gr.__version__} (5.x: {IS_GRADIO_5}, HF Spaces: {IS
 if IS_HUGGINGFACE:
     BACKEND_URL = os.getenv("BACKEND_URL", "https://healthcare-rag-chatbot-894545678354.asia-northeast3.run.app")
 else:
-    BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001")
+    BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 # 상태 저장용
 user_sessions = {}

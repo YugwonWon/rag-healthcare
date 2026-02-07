@@ -96,6 +96,13 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = 5
     RAG_SIMILARITY_THRESHOLD: float = 0.5
     
+    # GraphRAG 설정
+    GRAPHRAG_ENABLED: bool = True  # GraphRAG 지식그래프 사용 여부
+    GRAPHRAG_MAX_DEPTH: int = 2    # 지식그래프 탐색 깊이
+    
+    # LangGraph 설정
+    LANGGRAPH_FOLLOWUP_MIN_CONFIDENCE: float = 0.5  # 후속 질문 분류 최소 신뢰도
+    
     # 헬스케어 도메인 설정
     PATIENT_PROFILE_COLLECTION: str = "patient_profiles"
     MEDICATION_REMINDER_ENABLED: bool = True
