@@ -49,10 +49,12 @@ class ChatResponse(BaseModel):
     response: str
     nickname: str
     timestamp: str
+    intent: Optional[str] = None  # LangGraph 의도 분류 결과
     symptom_alert: Optional[dict] = None
     medication_reminders: Optional[list[str]] = None
     routine_status: Optional[str] = None
     health_analysis: Optional[dict] = None  # NER + N-gram 기반 건강 분석 결과
+    emergency_alert: Optional[dict] = None  # 위급 상황 알림
 
 
 class GreetingRequest(BaseModel):
@@ -121,6 +123,14 @@ async def lifespan(app: FastAPI):
         store = get_store()
         await store.init_pool()
         logger.info("🐘 PostgreSQL 연결 풀 초기화 완료")
+    
+    # Knowledge Graph 초기화 (GraphRAG)
+    try:
+        from app.knowledge_graph.health_kg import get_health_kg
+        kg = get_health_kg()
+        logger.info(f"🧠 Knowledge Graph 초기화 완료 | 노드={kg.graph.number_of_nodes()}, 엣지={kg.graph.number_of_edges()}")
+    except Exception as e:
+        logger.warning(f"Knowledge Graph 초기화 실패 (비필수): {e}")
     
     yield
     
@@ -239,6 +249,8 @@ async def chat(
         # 응답 추출 (dict 형태로 반환됨)
         response = result.get("response", "") if isinstance(result, dict) else result
         health_analysis = result.get("health_analysis") if isinstance(result, dict) else None
+        intent = result.get("intent") if isinstance(result, dict) else None
+        emergency_alert = result.get("emergency_alert") if isinstance(result, dict) else None
         
         # 3. 복약 알림 확인
         med_reminders = medication_reminder.check_and_send_reminders(request.nickname)
@@ -258,10 +270,12 @@ async def chat(
             response=response,
             nickname=request.nickname,
             timestamp=get_kst_now().isoformat(),
+            intent=intent,
             symptom_alert=symptom_analysis if symptom_analysis.get("detected_symptoms") else None,
             medication_reminders=med_reminders if med_reminders else None,
             routine_status=routine_status,
-            health_analysis=health_analysis
+            health_analysis=health_analysis,
+            emergency_alert=emergency_alert
         )
     
     except Exception as e:

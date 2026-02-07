@@ -2,7 +2,9 @@
 RAG 쿼리 핸들러
 치매노인 맞춤형 개인화 대화 처리
 
-NER(개체명 인식)과 N-gram 기반 건강 위험 신호 감지 전처리 포함
+v2: LangGraph 기반 상태 머신으로 리팩토링
+- 의도 분류 → 쿼리 재작성 → 검색(벡터 + GraphRAG) → 응답 생성
+- 기존 process_query() 인터페이스 유지 (하위 호환)
 
 데이터 레이어:
 - USE_LANGCHAIN_STORE=True: LangChain + pgvector (Cloud SQL)
@@ -22,6 +24,8 @@ from app.preprocessing import (
     NGramExtractor,
 )
 from app.preprocessing.health_signal_detector import RiskLevel
+from app.graph import ConversationState, Intent
+from app.graph.graph import get_conversation_graph
 from app.logger import get_logger
 
 # LangChain 스토어 (선택적)
@@ -34,8 +38,11 @@ logger = get_logger(__name__)
 class RAGQueryHandler:
     """RAG 기반 쿼리 처리기
     
-    NER + N-gram 전처리로 건강 위험 신호를 감지하고,
-    향상된 쿼리로 RAG 검색 수행
+    v2: LangGraph 상태 머신 기반
+    - 의도 분류 (키워드 기반, LLM 호출 없음)
+    - 쿼리 재작성 (후속 질문 맥락 유지)
+    - 벡터 검색 + GraphRAG 지식그래프
+    - LLM 응답 생성
     """
     
     def __init__(self, use_ner_model: bool = True):
@@ -56,7 +63,10 @@ class RAGQueryHandler:
             self._chroma = get_chroma_handler()
             logger.info("ChromaDB 데이터 스토어 사용")
         
-        # 전처리 모듈 초기화
+        # LangGraph 컴파일된 그래프
+        self._graph = get_conversation_graph()
+        
+        # 전처리 모듈 (기존 호환)
         self._use_ner_model = use_ner_model
         self._health_detector = HealthSignalDetector(use_ner_model=use_ner_model)
     
@@ -67,7 +77,9 @@ class RAGQueryHandler:
         include_history: bool = True
     ) -> Dict[str, Any]:
         """
-        사용자 쿼리 처리 (NER + N-gram 전처리 적용)
+        사용자 쿼리 처리 (LangGraph 기반)
+        
+        기존 인터페이스를 유지하면서 내부적으로 LangGraph 그래프를 실행한다.
         
         Args:
             nickname: 사용자 닉네임
@@ -78,91 +90,47 @@ class RAGQueryHandler:
             Dict containing:
                 - response: AI 응답
                 - health_analysis: 건강 분석 결과 (선택적)
+                - intent: 분류된 의도
+                - emergency_alert: 위급 알림 (선택적)
+                - graph_context: GraphRAG 컨텍스트 (선택적)
         """
-        logger.info(f"쿼리 처리 시작 | nickname={nickname} | query={query[:50]}...")
+        logger.info(f"쿼리 처리 시작 (LangGraph) | nickname={nickname} | query={query[:50]}...")
         
-        # 0. 전처리: NER + N-gram 기반 건강 위험 신호 감지
-        health_analysis = self._preprocess_query(query)
+        # LangGraph 초기 상태 구성
+        initial_state: ConversationState = {
+            "nickname": nickname,
+            "message": query,
+        }
         
-        # 향상된 쿼리 사용 (건강 용어 + 카테고리 확장)
-        enhanced_query = health_analysis.get("enhanced_query", query)
-        
-        # 건강 위험 수준 확인
-        risk_level = health_analysis.get("overall_risk", "low")
-        logger.debug(f"전처리 완료 | risk_level={risk_level} | terms={health_analysis.get('detected_health_terms', [])}")
-        
-        # 1. 환자 프로필 조회
-        patient_profile = await self._get_profile(nickname)
-        patient_info = self._format_patient_info(patient_profile)
-        
-        # 2. 관련 문서 검색 (향상된 쿼리 사용)
-        doc_results = self._search_documents(enhanced_query)
-        retrieved_context = self._format_retrieved_context(doc_results)
-        logger.debug(f"문서 검색 완료 | 결과 수={len(doc_results) if isinstance(doc_results, list) else len(doc_results.get('documents', [[]])[0])}")
-        
-        # 3. 대화 기록 조회 (개인화) - 요약 + 최근 대화
-        conversation_history = ""
-        activity_context = ""
-        if include_history:
-            # LangChain: 요약 + 최근 대화 결합
-            if self._use_langchain:
-                conversation_history = await self._get_conversation_with_summary(nickname)
-            else:
-                # ChromaDB: 기존 방식
-                conv_results = self._get_conversations(nickname, query, n_results=3)
-                conversation_history = self._format_conversation_history(conv_results)
-                activity_summary = self._chroma.get_user_activity_summary(nickname, hours=24)
-                activity_context = self._format_activity_summary(activity_summary)
-        
-        # 4. 건강 위험 신호 컨텍스트 추가
-        health_context = self._format_health_analysis(health_analysis)
-        
-        # 현재 한국 시간 가져오기
-        current_time = get_kst_datetime_str()
-        
-        # 대화 기록에 활동 요약 추가
-        if activity_context:
-            conversation_history = f"{conversation_history}\n\n{activity_context}"
-        
-        # 5. 프롬프트 구성 (건강 분석 결과 포함)
-        system_prompt = prompts.SYSTEM_PROMPT.format(
-            current_time=current_time,
-            patient_info=patient_info,
-            conversation_history=conversation_history,
-            retrieved_context=retrieved_context
-        )
-        
-        # 건강 위험이 감지되면 추가 지시사항 포함
-        if risk_level in ["high", "critical"]:
-            logger.warning(f"건강 위험 감지 | nickname={nickname} | risk_level={risk_level}")
-            system_prompt += f"\n\n[건강 위험 감지]\n{health_context}"
-            system_prompt += "\n주의: 사용자의 건강 상태에 주의를 기울이고, 필요시 보호자 연락이나 전문가 상담을 안내하세요."
-        
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query}
-        ]
-        
-        # 6. LLM 응답 생성
-        logger.debug("LLM 응답 생성 중...")
-        response = await self._llm.chat(messages)
-        logger.info(f"LLM 응답 완료 | 길이={len(response)}")
-        
-        # 7. 대화 기록 저장 (건강 분석 메타데이터 포함)
-        self._save_conversation(
-            nickname=nickname,
-            user_message=query,
-            assistant_response=response,
-            metadata={
-                "health_terms": health_analysis.get("detected_health_terms", [])[:5],
-                "risk_level": risk_level,
-                "risk_categories": [r["category"] for r in health_analysis.get("risk_categories", [])]
+        # 그래프 실행
+        try:
+            result = await self._graph.ainvoke(initial_state)
+        except Exception as e:
+            logger.error(f"LangGraph 실행 오류: {e}", exc_info=True)
+            # 폴백: 기본 응답
+            return {
+                "response": "죄송합니다, 일시적인 오류가 발생했어요. 다시 말씀해 주세요. 🙏",
+                "health_analysis": None,
             }
+        
+        # 결과 추출
+        response = result.get("response", "")
+        health_analysis = result.get("health_analysis")
+        intent = result.get("intent", Intent.GENERAL_CHAT)
+        risk_level = result.get("risk_level", "low")
+        emergency_alert = result.get("emergency_alert")
+        
+        logger.info(
+            f"쿼리 처리 완료 | intent={intent.value if isinstance(intent, Intent) else intent} "
+            f"| risk={risk_level} | response_len={len(response)}"
         )
         
         return {
             "response": response,
-            "health_analysis": health_analysis if risk_level != "low" else None
+            "health_analysis": health_analysis if risk_level != "low" else None,
+            "intent": intent.value if isinstance(intent, Intent) else str(intent),
+            "emergency_alert": emergency_alert,
+            "graph_context": result.get("graph_context", ""),
         }
     
     # ==========================================
