@@ -210,7 +210,11 @@ def retrieve_node(state: ConversationState) -> dict:
     if settings.USE_LANGCHAIN_STORE:
         store = get_langchain_store()
         doc_results = store.search_documents(query, k=settings.RAG_TOP_K)
-        retrieved_docs = [d.get("content", "")[:300] for d in doc_results]
+        # 대화 예제(conversations)는 제외하고 healthcare_docs만 참고 정보로 사용
+        retrieved_docs = [
+            d.get("content", "")[:300] for d in doc_results
+            if d.get("metadata", {}).get("category") != "conversations"
+        ]
     else:
         chroma = get_chroma_handler()
         doc_results = chroma.search_documents(query)
@@ -278,6 +282,11 @@ async def generate_response_node(state: ConversationState) -> dict:
     conversation_history = _format_history(state.get("conversation_history", []))
     retrieved_context = _format_docs(state.get("retrieved_docs", []))
     graph_context = state.get("graph_context", "")
+
+    # 일반 대화면 참고 정보를 비워서 자연스러운 대화 유도
+    if intent == Intent.GENERAL_CHAT:
+        retrieved_context = "일반 대화 - 참고 정보 불필요"
+        graph_context = ""
 
     # 그래프 컨텍스트를 참고 정보에 추가
     if graph_context:

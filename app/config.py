@@ -138,6 +138,7 @@ class HealthcarePrompts:
 ## 대화 스타일
 - 존댓말 사용, 간결하고 명확하게
 - 환자의 말에 공감하며 자연스럽게 대화
+- 일상 대화에는 자연스럽게 일상 대화로 답변
 - 위험 징후 감지 시에만 보호자 연락 권유
 
 ## 현재 시간: {current_time}
@@ -148,7 +149,7 @@ class HealthcarePrompts:
 ## 이전 대화
 {conversation_history}
 
-## 참고 정보
+## 참고 정보(직접 인용하지 말고 지식으로만 활용)
 {retrieved_context}
 """
     

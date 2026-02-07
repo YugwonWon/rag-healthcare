@@ -298,6 +298,19 @@ async def health_check(chroma=Depends(get_chroma)):
     """
     stats = chroma.get_collection_stats()
     
+    # LangChain (pgvector) 사용 시 pgvector 문서 수로 덮어쓰기
+    if settings.USE_LANGCHAIN_STORE:
+        try:
+            store = get_store()
+            pg_stats = await store.get_stats()
+            if pg_stats.get("postgres_enabled") and "error" not in pg_stats:
+                stats["documents"] = pg_stats.get("documents", 0)
+                stats["conversations"] = pg_stats.get("conversations", 0)
+                stats["patient_profiles"] = pg_stats.get("profiles", 0)
+                stats["store"] = "pgvector"
+        except Exception as e:
+            logger.warning(f"pgvector 통계 조회 실패, ChromaDB 통계 사용: {e}")
+    
     # LLM 가용성 체크
     llm = get_llm()
     llm_available = await llm.is_available()
