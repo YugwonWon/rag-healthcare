@@ -98,7 +98,7 @@ class OllamaClient:
             "options": {
                 "temperature": temperature or settings.LLM_TEMPERATURE,
                 "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
-                "repeat_penalty": 1.1,  # 반복 방지
+                "repeat_penalty": 1.3,  # 반복 방지 (파인튜닝 모델 과적합 보완)
                 "top_p": 0.9,
                 "top_k": 40,
             }
@@ -110,7 +110,12 @@ class OllamaClient:
                 json=payload
             )
             response.raise_for_status()
-            return response.json()["message"]["content"]
+            content = response.json()["message"]["content"]
+            
+            # EXAONE 4.0 후처리
+            content = self._postprocess_exaone(content)
+            
+            return content
         
         except httpx.TimeoutException:
             logger.error(f"Ollama 타임아웃 ({OLLAMA_TIMEOUT}초 초과)")
@@ -119,6 +124,27 @@ class OllamaClient:
         except httpx.HTTPError as e:
             logger.error(f"Ollama HTTP 에러: {e}")
             return "죄송합니다, 일시적인 오류가 발생했어요. 다시 말씀해 주세요. 🙏"
+    
+    @staticmethod
+    def _postprocess_exaone(content: str) -> str:
+        """EXAONE 4.0 응답 후처리: think 블록 제거, 아티팩트 정리"""
+        import re
+        
+        # 1) <think>...</think> 블록 제거 (비추론 모드 빈 블록 포함)
+        if "</think>" in content:
+            content = content.split("</think>", 1)[1]
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        content = re.sub(r"</?think>", "", content)
+        
+        # 2) <tool_call> 등 hallucinated 태그 제거
+        content = re.sub(r"</?tool_call[^>]*>", "", content)
+        
+        # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
+        content = content.strip()
+        content = re.sub(r"^\[[-\d]*\]\s*", "", content)  # [-1] 등
+        content = re.sub(r"^:\s*", "", content)  # 앞의 : 제거
+        
+        return content.strip()
     
     async def is_available(self) -> bool:
         """Ollama 서버 사용 가능 여부 확인"""
