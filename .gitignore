@@ -1,5 +1,5 @@
 data/chroma
-models/
+models/*.gguf
 finetuning/output
 finetuning/data
 # Byte-compiled / optimized / DLL files
@@ -214,3 +214,4 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 *.log
+venv
