@@ -123,6 +123,98 @@ async def lifespan(app: FastAPI):
         store = get_store()
         await store.init_pool()
         logger.info("🐘 PostgreSQL 연결 풀 초기화 완료")
+        
+        # pgvector에 문서가 0개이면 healthcare_docs 자동 로드
+        try:
+            pg_stats = await store.get_stats()
+            doc_count = pg_stats.get("documents", 0)
+            logger.info(f"📚 pgvector 문서 수: {doc_count}")
+            
+            if doc_count == 0:
+                from pathlib import Path
+                from langchain_text_splitters import RecursiveCharacterTextSplitter
+                from langchain_community.document_loaders import TextLoader
+                
+                docs_dir = Path(__file__).parent.parent / "data" / "healthcare_docs"
+                conv_dir = Path(__file__).parent.parent / "data" / "conversations"
+                
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000, chunk_overlap=200,
+                    separators=["\n---\n", "\n\n", "\n", " "]
+                )
+                
+                all_docs = []
+                
+                # healthcare_docs 로드
+                if docs_dir.exists():
+                    txt_files = sorted(docs_dir.glob("*.txt"))
+                    logger.info(f"📂 healthcare_docs 자동 로드: {len(txt_files)}개 파일")
+                    for txt_file in txt_files:
+                        try:
+                            loader = TextLoader(str(txt_file), encoding="utf-8")
+                            docs = loader.load()
+                            for doc in docs:
+                                doc.metadata["category"] = "healthcare_docs"
+                                doc.metadata["source_name"] = txt_file.stem
+                            all_docs.extend(splitter.split_documents(docs))
+                        except Exception as e:
+                            logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
+                
+                # conversations 로드
+                if conv_dir.exists():
+                    conv_files = sorted(conv_dir.glob("*.txt"))
+                    logger.info(f"📂 conversations 자동 로드: {len(conv_files)}개 파일")
+                    for txt_file in conv_files:
+                        try:
+                            loader = TextLoader(str(txt_file), encoding="utf-8")
+                            docs = loader.load()
+                            for doc in docs:
+                                doc.metadata["category"] = "conversations"
+                                doc.metadata["source_name"] = txt_file.stem
+                            all_docs.extend(splitter.split_documents(docs))
+                        except Exception as e:
+                            logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
+                
+                # pgvector에 배치 로드
+                if all_docs:
+                    batch_size = 50
+                    loaded = 0
+                    for i in range(0, len(all_docs), batch_size):
+                        batch = all_docs[i:i + batch_size]
+                        try:
+                            store.vectorstore.add_documents(batch)
+                            loaded += len(batch)
+                        except Exception as e:
+                            logger.warning(f"배치 로드 실패: {e}")
+                    logger.info(f"✅ pgvector 자동 로드 완료: {loaded}/{len(all_docs)}개 청크")
+        except Exception as e:
+            logger.warning(f"pgvector 문서 자동 로드 실패 (비필수): {e}")
+    else:
+        # ChromaDB 사용 시 문서가 0개이면 자동 로드
+        if stats['documents'] == 0:
+            try:
+                from pathlib import Path
+                from scripts.load_healthcare_docs import load_text_file
+                
+                docs_dir = Path(__file__).parent.parent / "data" / "healthcare_docs"
+                if docs_dir.exists():
+                    txt_files = list(docs_dir.glob("*.txt"))
+                    logger.info(f"📂 healthcare_docs 자동 로드 시작: {len(txt_files)}개 파일")
+                    total_chunks = 0
+                    for txt_file in txt_files:
+                        try:
+                            chunks = load_text_file(txt_file)
+                            if chunks:
+                                documents = [c["text"] for c in chunks]
+                                metadatas = [c["metadata"] for c in chunks]
+                                ids = [f"{txt_file.stem}_{i}" for i in range(len(chunks))]
+                                chroma.add_documents(documents=documents, metadatas=metadatas, ids=ids)
+                                total_chunks += len(chunks)
+                        except Exception as e:
+                            logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
+                    logger.info(f"✅ healthcare_docs 자동 로드 완료: {total_chunks}개 청크")
+            except Exception as e:
+                logger.warning(f"healthcare_docs 자동 로드 실패 (비필수): {e}")
     
     # Knowledge Graph 초기화 (GraphRAG)
     try:

@@ -1,141 +1,78 @@
 #!/bin/bash
 # Cloud Run용 시작 스크립트: Ollama + FastAPI (범용 모델 지원)
-#
-# 모델 등록 방식:
-#   1. models/{모델명}.gguf + models/Modelfile.{모델명} 이 있으면 → 자동 등록
-#   2. Modelfile만 있으면 → Modelfile로 등록 (GGUF 경로가 Modelfile 안에 지정)
-#   3. 둘 다 없으면 → ollama pull로 다운로드 시도
+# 모델은 Dockerfile에서 이미 pre-registered되므로 런타임에서는 서버 시작만 필요
 
-set -e
+# set -e 사용하지 않음 - 부분 실패에도 서버는 시작해야 함
 
 export PYTHONIOENCODING=utf-8
 export OLLAMA_DEBUG=0
 
 # ─── 1. Ollama 서버 시작 ───
 echo "🚀 Starting Ollama server..."
-ollama serve 2>&1 | grep -v "print_info\|llama_\|ggml_\|rope_\|vocab\|token" &
+ollama serve > /dev/null 2>&1 &
 OLLAMA_PID=$!
 
 echo "⏳ Waiting for Ollama to be ready..."
-for i in {1..60}; do
+OLLAMA_READY=false
+for i in $(seq 1 30); do
     if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
-        echo "✅ Ollama is ready!"
+        echo "✅ Ollama is ready! (${i}s)"
+        OLLAMA_READY=true
         break
-    fi
-    if [ $i -eq 60 ]; then
-        echo "❌ Ollama failed to start"
-        exit 1
     fi
     sleep 1
 done
 
-# ─── 2. 모델 등록 (범용) ───
+if [ "$OLLAMA_READY" = false ]; then
+    echo "⚠️ Ollama not ready yet, but starting server anyway..."
+fi
+
+# ─── 2. 모델 확인 (Dockerfile에서 이미 pre-registered) ───
 MODEL_NAME="${OLLAMA_MODEL:-k-exaone-counseling}"
-MODELS_DIR="/app/models"
-GGUF_FILE="${MODELS_DIR}/${MODEL_NAME}.gguf"
-MODELFILE="${MODELS_DIR}/Modelfile.${MODEL_NAME}"
-
 echo "📦 Model: ${MODEL_NAME}"
-echo "   GGUF:      ${GGUF_FILE}"
-echo "   Modelfile:  ${MODELFILE}"
 
-if ollama list 2>/dev/null | grep -q "${MODEL_NAME}"; then
-    echo "✅ Model already registered!"
-else
-    if [ -f "${MODELFILE}" ]; then
-        # Modelfile이 있으면 사용
-        echo "📝 Registering model with Modelfile..."
-        ollama create "${MODEL_NAME}" -f "${MODELFILE}"
-        echo "✅ ${MODEL_NAME} registered!"
-    elif [ -f "${GGUF_FILE}" ]; then
-        # GGUF만 있으면 기본 Modelfile 자동 생성
-        echo "📝 Generating default Modelfile for ${MODEL_NAME}..."
-        cat > /tmp/Modelfile.auto << EOF
-FROM ${GGUF_FILE}
-SYSTEM "당신은 노인건강전문상담사입니다. 3~4문장으로 간결하게 답변하세요."
-PARAMETER temperature 0.1
-PARAMETER top_p 0.9
-PARAMETER num_predict 512
-PARAMETER num_ctx 4096
-EOF
-        ollama create "${MODEL_NAME}" -f /tmp/Modelfile.auto
-        rm -f /tmp/Modelfile.auto
-        echo "✅ ${MODEL_NAME} registered (auto-generated Modelfile)!"
+if [ "$OLLAMA_READY" = true ]; then
+    if ollama list 2>/dev/null | grep -q "${MODEL_NAME}"; then
+        echo "✅ Model already registered (pre-built)!"
     else
-        # 둘 다 없으면 Ollama Hub에서 pull
-        echo "⬇️ No local files found. Pulling from Ollama Hub: ${MODEL_NAME}..."
-        for attempt in 1 2 3; do
-            if ollama pull "${MODEL_NAME}" 2>&1 | tail -5; then
-                echo "✅ Model pulled successfully!"
-                break
-            else
-                echo "⚠️ Pull attempt $attempt failed, retrying..."
-                sleep 5
-            fi
-            if [ $attempt -eq 3 ]; then
-                echo "❌ Failed to pull model after 3 attempts"
-                exit 1
-            fi
-        done
+        echo "⚠️ Model not found, attempting registration..."
+        MODELS_DIR="/app/models"
+        MODELFILE="${MODELS_DIR}/Modelfile.${MODEL_NAME}"
+        GGUF_FILE="${MODELS_DIR}/${MODEL_NAME}.gguf"
+        if [ -f "${MODELFILE}" ]; then
+            ollama create "${MODEL_NAME}" -f "${MODELFILE}" 2>&1 || echo "⚠️ Model create failed, continuing..."
+        elif [ -f "${GGUF_FILE}" ]; then
+            printf "FROM ${GGUF_FILE}\nPARAMETER temperature 0.1\n" > /tmp/Modelfile.auto
+            ollama create "${MODEL_NAME}" -f /tmp/Modelfile.auto 2>&1 || echo "⚠️ Model create failed, continuing..."
+            rm -f /tmp/Modelfile.auto
+        else
+            ollama pull "${MODEL_NAME}" 2>&1 || echo "⚠️ Model pull failed, continuing..."
+        fi
     fi
-fi
-
-# ─── 3. 모델 검증 (한글 테스트) ───
-echo "🔍 Verifying model..."
-KOREAN_TEST=$(curl -s http://localhost:11434/api/generate \
-    -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"안녕하세요라고 말해주세요\", \"stream\": false}" 2>&1)
-if echo "$KOREAN_TEST" | grep -q "안녕"; then
-    echo "✅ Korean language support verified!"
 else
-    echo "⚠️ Model may have issues with Korean, but continuing..."
+    echo "⚠️ Ollama not ready, skipping model check"
 fi
 
-# 워밍업
-echo "🔥 Warming up model..."
-curl -s http://localhost:11434/api/generate \
-    -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"hello\", \"stream\": false}" > /dev/null 2>&1 || true
-echo "✅ Model ready!"
+# ─── 3. 서버 시작 후 백그라운드 워밍업 ───
+echo "🔥 Warmup will run after server starts..."
 
-# ─── 4. 데이터 초기화 ───
-echo "📚 Checking data store..."
-if [ -d "/app/data/chroma" ]; then
-    echo "✅ ChromaDB directory exists"
-else
-    echo "⚠️ ChromaDB directory not found, creating..."
-    mkdir -p /app/data/chroma
-fi
-
-echo "📄 Checking and loading documents..."
-python3 -c "
-from pathlib import Path
-from app.vector_store import get_chroma_handler
-chroma = get_chroma_handler()
-stats = chroma.get_collection_stats()
-print(f'Current - Documents: {stats[\"documents\"]}')
-print(f'          Conversations: {stats[\"conversations\"]}')
-print(f'          Profiles: {stats[\"patient_profiles\"]}')
-
-import sys
-sys.path.insert(0, '/app')
-docs_dir = Path('/app/data/healthcare_docs')
-
-if docs_dir.exists():
-    doc_files = list(docs_dir.glob('*.txt')) + list(docs_dir.glob('*.md'))
-    print(f'📁 Found {len(doc_files)} document files in healthcare_docs/')
-    
-    if len(doc_files) > stats['documents'] or stats['documents'] == 0:
-        print('⬆️ Loading documents...')
-        from scripts.load_healthcare_docs import load_all_documents
-        load_all_documents(docs_dir)
-        stats = chroma.get_collection_stats()
-        print(f'After loading - Documents: {stats[\"documents\"]}')
-    else:
-        print('✅ Documents already up to date')
-else:
-    print(f'⚠️ Healthcare docs directory not found: {docs_dir}')
-"
+# ─── 4. 디렉토리 준비 ───
+mkdir -p /app/data/chroma /app/logs
 
 # ─── 5. FastAPI 서버 실행 ───
-echo "🌐 Starting FastAPI server on port ${PORT:-8000}..."
+PORT=${PORT:-8080}
+echo "🌐 Starting FastAPI server on port ${PORT}..."
 echo "   Model: ${MODEL_NAME}"
-exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+
+# 서버 시작 후 백그라운드에서 워밍업 + 데이터 초기화
+(
+    sleep 10
+    # 워밍업
+    if [ "$OLLAMA_READY" = true ]; then
+        curl -s http://localhost:11434/api/generate \
+            -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"hello\", \"stream\": false}" > /dev/null 2>&1 || true
+        echo "✅ Background warmup complete!"
+    fi
+) &
+
+exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT}

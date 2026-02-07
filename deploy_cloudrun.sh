@@ -18,7 +18,7 @@ fi
 PROJECT_ID="${GCP_PROJECT_ID:-rag-healthcare-483412}"
 REGION="${GCP_REGION:-asia-northeast3}"
 SERVICE_NAME="${SERVICE_NAME:-healthcare-rag-chatbot}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-kanana-counseling}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-k-exaone-counseling}"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
 
 # 색상 출력
@@ -33,9 +33,18 @@ echo "  리전: ${REGION}"
 echo "  서비스: ${SERVICE_NAME}"
 echo "  모델: ${OLLAMA_MODEL}"
 
-# 1. 로컬에서 Docker 빌드 (캐시 활용)
-echo -e "\n${YELLOW}📦 로컬에서 Docker 이미지 빌드 중... (캐시 활용)${NC}"
-docker build -t ${IMAGE_NAME}:latest -f Dockerfile.ollama .
+# GGUF 파일 확인
+if [ ! -f "models/${OLLAMA_MODEL}.gguf" ]; then
+    echo -e "${RED}❌ models/${OLLAMA_MODEL}.gguf 파일이 없습니다!${NC}"
+    echo "USB에서 복사: cp /Volumes/SAMSUNG-USB/models/${OLLAMA_MODEL}.gguf models/"
+    exit 1
+fi
+echo -e "  GGUF: models/${OLLAMA_MODEL}.gguf ($(du -h models/${OLLAMA_MODEL}.gguf | cut -f1))"
+
+# 1. 로컬에서 Docker 빌드 (amd64 플랫폼 - Cloud Run 호환)
+echo -e "\n${YELLOW}📦 로컬에서 Docker 이미지 빌드 중... (amd64, 캐시 활용)${NC}"
+echo -e "  ⚠️  Apple Silicon에서 cross-build하므로 시간이 더 걸릴 수 있습니다."
+docker build --platform linux/amd64 --build-arg OLLAMA_MODEL=${OLLAMA_MODEL} -t ${IMAGE_NAME}:latest -f Dockerfile.ollama .
 
 # 2. GCR에 푸시
 echo -e "\n${YELLOW}📤 GCR에 이미지 푸시 중...${NC}"
@@ -48,13 +57,15 @@ gcloud run deploy ${SERVICE_NAME} \
     --platform managed \
     --region ${REGION} \
     --allow-unauthenticated \
+    --port 8080 \
     --memory 8Gi \
     --cpu 4 \
     --min-instances 0 \
     --max-instances 2 \
     --timeout 300 \
-    --concurrency 5 \
     --cpu-boost \
+    --no-cpu-throttling \
+    --concurrency 5 \
     --execution-environment gen2 \
     --add-cloudsql-instances ${PROJECT_ID}:${REGION}:healthcare-db \
     --set-env-vars "CHROMA_IN_MEMORY=false" \
