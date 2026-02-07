@@ -110,32 +110,34 @@ def convert_to_gguf(model_path: str, output_path: str, quantization: str = "q4_k
 
 def create_ollama_modelfile(gguf_path: str, output_path: str, model_name: str):
     """Ollama Modelfile 생성"""
-    modelfile_content = f'''# Kanana 상담 모델 - 파인튜닝됨
+    modelfile_content = f'''# EXAONE 4.0 상담 모델 - 파인튜닝됨
 FROM {gguf_path}
 
-# 시스템 프롬프트
+# 시스템 프롬프트 (한국어 상담)
 SYSTEM """당신은 노인건강전문상담사입니다.
+반드시 한국어로만 응답하세요.
 - 2~3문장으로 간결하게 답변
 - 공감 후 질문으로 문제를 파악
 - 일상에서 실천할 수 있는 건강 습관 안내
 - 심각한 경우에만 병원 진료 권유"""
 
 # 파라미터 설정
-PARAMETER temperature 0.7
+PARAMETER temperature 0.1
 PARAMETER top_p 0.9
 PARAMETER top_k 40
+PARAMETER repeat_penalty 1.1
 PARAMETER num_predict 256
-PARAMETER stop "<|im_end|>"
-PARAMETER stop "<|im_start|>"
+PARAMETER stop "[|endofturn|]"
 
-# 템플릿 (ChatML 형식)
-TEMPLATE """{{{{ if .System }}}}<|im_start|>system
-{{{{ .System }}}}<|im_end|>
-{{{{ end }}}}{{{{ if .Prompt }}}}<|im_start|>user
-{{{{ .Prompt }}}}<|im_end|>
-{{{{ end }}}}<|im_start|>assistant
-{{{{ .Response }}}}<|im_end|>
-"""
+# 템플릿 (EXAONE 형식 - 비추론 모드)
+TEMPLATE """{{{{- if .System }}}}[|system|]{{{{ .System }}}}[|endofturn|]
+{{{{- end }}}}
+{{{{- range .Messages }}}}
+{{{{- if eq .Role "user" }}}}[|user|]{{{{ .Content }}}}[|endofturn|]
+{{{{- else if eq .Role "assistant" }}}}[|assistant|]{{{{ .Content }}}}[|endofturn|]
+{{{{- end }}}}
+{{{{- end }}}}[|assistant|]<think>
+</think>"""
 '''
     
     modelfile_path = Path(output_path) / "Modelfile"
@@ -153,20 +155,20 @@ def main():
     parser = argparse.ArgumentParser(description="LoRA 병합 및 GGUF 변환")
     
     parser.add_argument("--base_model", type=str,
-                        default="kakaocorp/kanana-nano-2.1b-instruct",
+                        default="LGAI-EXAONE/EXAONE-4.0-1.2B",
                         help="베이스 모델")
     parser.add_argument("--lora_path", type=str,
-                        default="./finetuning/output/kanana-counseling-lora",
+                        default="./finetuning/output/exaone-counseling-lora",
                         help="LoRA 어댑터 경로")
     parser.add_argument("--output_dir", type=str,
-                        default="./finetuning/output/kanana-counseling-merged",
+                        default="./finetuning/output/exaone-counseling-merged",
                         help="병합 모델 출력 경로")
     parser.add_argument("--quantization", type=str,
                         default="q4_k_m",
                         choices=["f16", "q8_0", "q4_k_m", "q4_k_s", "q5_k_m"],
                         help="GGUF 양자화 타입")
     parser.add_argument("--model_name", type=str,
-                        default="kanana-counseling",
+                        default="exaone-counseling",
                         help="Ollama 모델 이름")
     parser.add_argument("--skip_merge", action="store_true",
                         help="병합 단계 건너뛰기 (이미 병합된 경우)")
