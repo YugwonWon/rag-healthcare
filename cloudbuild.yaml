@@ -1,5 +1,9 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/healthcare-rag-chatbot:latest', '-f', 'Dockerfile.ollama', '.']
+    args: ['build', '--build-arg', 'OLLAMA_MODEL=kanana-base', '-t', 'gcr.io/$PROJECT_ID/healthcare-rag-chatbot:latest', '-f', 'Dockerfile.ollama', '.']
 images:
   - 'gcr.io/$PROJECT_ID/healthcare-rag-chatbot:latest'
+timeout: '3600s'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  diskSizeGb: 50

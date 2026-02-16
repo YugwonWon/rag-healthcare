@@ -40,7 +40,7 @@ if [ "$OLLAMA_READY" = true ]; then
         MODELFILE="${MODELS_DIR}/Modelfile.${MODEL_NAME}"
         GGUF_FILE="${MODELS_DIR}/${MODEL_NAME}.gguf"
         if [ -f "${MODELFILE}" ]; then
-            ollama create "${MODEL_NAME}" -f "${MODELFILE}" 2>&1 || echo "⚠️ Model create failed, continuing..."
+            cd "${MODELS_DIR}" && ollama create "${MODEL_NAME}" -f "Modelfile.${MODEL_NAME}" 2>&1 && cd /app || echo "⚠️ Model create failed, continuing..."
         elif [ -f "${GGUF_FILE}" ]; then
             printf "FROM ${GGUF_FILE}\nPARAMETER temperature 0.1\n" > /tmp/Modelfile.auto
             ollama create "${MODEL_NAME}" -f /tmp/Modelfile.auto 2>&1 || echo "⚠️ Model create failed, continuing..."

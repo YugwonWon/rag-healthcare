@@ -84,14 +84,14 @@ def main():
                         help="검증 데이터 경로")
     
     # LoRA 설정 (경량 - 스타일만 학습)
-    parser.add_argument("--lora_r", type=int, default=8, help="LoRA rank (작을수록 경량)")
-    parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
+    parser.add_argument("--lora_r", type=int, default=4, help="LoRA rank (작을수록 경량, 과적합 방지)")
+    parser.add_argument("--lora_alpha", type=int, default=8, help="LoRA alpha (r의 2배)")
     parser.add_argument("--lora_dropout", type=float, default=0.05, help="LoRA dropout")
     
     # 학습 설정
-    parser.add_argument("--epochs", type=int, default=7, help="에포크 수 (소량 데이터는 5-10 권장)")
+    parser.add_argument("--epochs", type=int, default=2, help="에포크 수 (114샘플 기준 2-3 권장, 과적합 주의)")
     parser.add_argument("--batch_size", type=int, default=2, help="배치 크기")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="학습률 (소량 데이터는 5e-5~2e-4 권장)")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, help="학습률 (과적합 방지를 위해 낮게 설정)")
     parser.add_argument("--max_seq_length", type=int, default=1024, help="최대 시퀀스 길이")
     parser.add_argument("--gradient_accumulation", type=int, default=4, help="그래디언트 누적")
     
@@ -197,7 +197,8 @@ def main():
         per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation,
         learning_rate=args.learning_rate,
-        warmup_ratio=0.15,
+        warmup_ratio=0.1,
+        weight_decay=0.1,
         lr_scheduler_type="cosine",
         logging_steps=10,
         save_strategy="epoch",

@@ -6,7 +6,6 @@
 import asyncio
 from typing import Optional
 import httpx
-from sentence_transformers import SentenceTransformer
 import numpy as np
 
 from app.config import settings
@@ -166,7 +165,7 @@ class LocalEmbedding:
     """온디바이스 임베딩 모델 (sentence-transformers)"""
     
     _instance: Optional["LocalEmbedding"] = None
-    _model: Optional[SentenceTransformer] = None
+    _model = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -175,10 +174,25 @@ class LocalEmbedding:
     
     def __init__(self):
         if self._model is None:
-            self._model = SentenceTransformer(
-                settings.EMBEDDING_MODEL,
-                device=settings.EMBEDDING_DEVICE
-            )
+            # lazy import + safetensors LOAD REPORT 억제 (fd 리다이렉트)
+            import os as _os
+            _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+            _old_stdout = _os.dup(1)
+            _old_stderr = _os.dup(2)
+            _os.dup2(_devnull, 1)
+            _os.dup2(_devnull, 2)
+            try:
+                from sentence_transformers import SentenceTransformer
+                self.__class__._model = SentenceTransformer(
+                    settings.EMBEDDING_MODEL,
+                    device=settings.EMBEDDING_DEVICE
+                )
+            finally:
+                _os.dup2(_old_stdout, 1)
+                _os.dup2(_old_stderr, 2)
+                _os.close(_old_stdout)
+                _os.close(_old_stderr)
+                _os.close(_devnull)
     
     def embed(self, texts: list[str]) -> np.ndarray:
         """

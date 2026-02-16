@@ -83,7 +83,9 @@ RUN if [ -f "./models/Modelfile.${OLLAMA_MODEL}" ]; then \
         echo "📦 Pre-registering model: ${OLLAMA_MODEL}" && \
         ollama serve &  \
         sleep 3 && \
-        ollama create ${OLLAMA_MODEL} -f ./models/Modelfile.${OLLAMA_MODEL} && \
+        cd /app/models && \
+        ollama create ${OLLAMA_MODEL} -f Modelfile.${OLLAMA_MODEL} && \
+        cd /app && \
         echo "✅ Model pre-registered!" && \
         kill %1 2>/dev/null; \
     elif [ -f "./models/${OLLAMA_MODEL}.gguf" ]; then \
