@@ -33,13 +33,37 @@ echo "  리전: ${REGION}"
 echo "  서비스: ${SERVICE_NAME}"
 echo "  모델: ${OLLAMA_MODEL}"
 
-# GGUF 파일 확인
-if [ ! -f "models/${OLLAMA_MODEL}.gguf" ]; then
-    echo -e "${RED}❌ models/${OLLAMA_MODEL}.gguf 파일이 없습니다!${NC}"
+# GGUF 파일 확인 (심링크면 실제 파일로 복사)
+GGUF_FILE="models/${OLLAMA_MODEL}.gguf"
+SYMLINK_RESTORED=false
+
+if [ ! -e "${GGUF_FILE}" ]; then
+    echo -e "${RED}❌ ${GGUF_FILE} 파일이 없습니다!${NC}"
     echo "USB에서 복사: cp /Volumes/SAMSUNG-USB/models/${OLLAMA_MODEL}.gguf models/"
     exit 1
 fi
-echo -e "  GGUF: models/${OLLAMA_MODEL}.gguf ($(du -h models/${OLLAMA_MODEL}.gguf | cut -f1))"
+
+if [ -L "${GGUF_FILE}" ]; then
+    SYMLINK_TARGET=$(readlink "${GGUF_FILE}")
+    echo -e "${YELLOW}🔗 심링크 감지 → 실제 파일로 복사 (Docker 빌드용)${NC}"
+    echo "   ${GGUF_FILE} → ${SYMLINK_TARGET}"
+    rm "${GGUF_FILE}"
+    cp "${SYMLINK_TARGET}" "${GGUF_FILE}"
+    SYMLINK_RESTORED=true
+    echo "   ✅ 복사 완료 (빌드 후 심링크 복원 예정)"
+fi
+echo -e "  GGUF: ${GGUF_FILE} ($(du -h ${GGUF_FILE} | cut -f1))"
+
+# 빌드 후 심링크 복원 함수
+restore_symlink() {
+    if [ "$SYMLINK_RESTORED" = true ] && [ -n "$SYMLINK_TARGET" ]; then
+        echo -e "${YELLOW}🔗 심링크 복원 중...${NC}"
+        rm -f "${GGUF_FILE}"
+        ln -s "${SYMLINK_TARGET}" "${GGUF_FILE}"
+        echo "   ✅ 심링크 복원 완료"
+    fi
+}
+trap restore_symlink EXIT
 
 # 1. 로컬에서 Docker 빌드 (amd64 플랫폼 - Cloud Run 호환)
 echo -e "\n${YELLOW}📦 로컬에서 Docker 이미지 빌드 중... (amd64, 캐시 활용)${NC}"

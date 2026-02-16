@@ -13,7 +13,26 @@ from typing import Optional
 from contextlib import asynccontextmanager
 
 import asyncpg
-from langchain_community.embeddings import HuggingFaceEmbeddings
+import warnings
+warnings.filterwarnings("ignore", message=".*deprecated.*", module="langchain")
+warnings.filterwarnings("ignore", message=".*LangChain.*")
+
+# 임포트 시 safetensors/sentence_transformers가 stdout에 출력하는 것을 억제
+import os as _os
+_devnull_fd = _os.open(_os.devnull, _os.O_WRONLY)
+_saved_stdout = _os.dup(1)
+_saved_stderr = _os.dup(2)
+_os.dup2(_devnull_fd, 1)
+_os.dup2(_devnull_fd, 2)
+try:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+finally:
+    _os.dup2(_saved_stdout, 1)
+    _os.dup2(_saved_stderr, 2)
+    _os.close(_saved_stdout)
+    _os.close(_saved_stderr)
+    _os.close(_devnull_fd)
+
 from langchain_postgres import PGVector
 from langchain_community.chat_message_histories import PostgresChatMessageHistory
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
@@ -61,10 +80,25 @@ class LangChainDataStore:
         
         # 1. 임베딩 모델 (로컬 - 변경 없음)
         logger.info(f"임베딩 모델 로딩: {settings.EMBEDDING_MODEL}")
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=settings.EMBEDDING_MODEL,
-            model_kwargs={"device": settings.EMBEDDING_DEVICE}
-        )
+        # safetensors LOAD REPORT (Rust stdout) + HF Hub 경고 (stderr) 출력 억제
+        # os.dup2로 파일 디스크립터 레벨에서 리다이렉트 (Rust/C 출력 포함)
+        import os as _os
+        _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+        _old_stdout = _os.dup(1)
+        _old_stderr = _os.dup(2)
+        _os.dup2(_devnull, 1)
+        _os.dup2(_devnull, 2)
+        try:
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name=settings.EMBEDDING_MODEL,
+                model_kwargs={"device": settings.EMBEDDING_DEVICE}
+            )
+        finally:
+            _os.dup2(_old_stdout, 1)
+            _os.dup2(_old_stderr, 2)
+            _os.close(_old_stdout)
+            _os.close(_old_stderr)
+            _os.close(_devnull)
         
         # 2. 벡터 스토어 (pgvector)
         self.vectorstore = PGVector(
@@ -214,11 +248,14 @@ class LangChainDataStore:
     
     def get_chat_history(self, nickname: str) -> PostgresChatMessageHistory:
         """닉네임별 대화 기록 객체 반환"""
-        return PostgresChatMessageHistory(
-            connection_string=self.connection_string,
-            session_id=nickname,
-            table_name="chat_history"
-        )
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            return PostgresChatMessageHistory(
+                connection_string=self.connection_string,
+                session_id=nickname,
+                table_name="chat_history"
+            )
     
     def save_conversation(self, nickname: str, user_msg: str, ai_msg: str):
         """대화 저장"""

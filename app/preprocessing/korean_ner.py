@@ -116,21 +116,38 @@ class KoreanNERProcessor:
             return True
             
         try:
+            import transformers
+            transformers.logging.set_verbosity_error()
             from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
             
             logger.info(f"NER 모델 로딩 중: {self.model_name}")
             
-            tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            model = AutoModelForTokenClassification.from_pretrained(self.model_name)
-            
-            device = 0 if self.use_gpu else -1
-            self._pipeline = pipeline(
-                "ner",
-                model=model,
-                tokenizer=tokenizer,
-                aggregation_strategy="simple",  # BIO 태그 병합
-                device=device
-            )
+            # safetensors LOAD REPORT (Rust stdout) 출력 억제
+            # os.dup2로 파일 디스크립터 레벨에서 리다이렉트
+            import os as _os
+            _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+            _old_stdout = _os.dup(1)
+            _old_stderr = _os.dup(2)
+            _os.dup2(_devnull, 1)
+            _os.dup2(_devnull, 2)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                model = AutoModelForTokenClassification.from_pretrained(self.model_name)
+                
+                device = 0 if self.use_gpu else -1
+                self._pipeline = pipeline(
+                    "ner",
+                    model=model,
+                    tokenizer=tokenizer,
+                    aggregation_strategy="simple",  # BIO 태그 병합
+                    device=device
+                )
+            finally:
+                _os.dup2(_old_stdout, 1)
+                _os.dup2(_old_stderr, 2)
+                _os.close(_old_stdout)
+                _os.close(_old_stderr)
+                _os.close(_devnull)
             
             self._is_loaded = True
             logger.info("NER 모델 로딩 완료")
