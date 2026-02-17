@@ -50,17 +50,11 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 384
     EMBEDDING_DEVICE: str = "cpu"  # cpu, cuda, mps
     
-    # ChromaDB 설정 (폴백용)
-    CHROMA_PERSIST_DIR: str = "./data/chroma"
-    CHROMA_COLLECTION_NAME: str = "healthcare_docs"
-    CHROMA_IN_MEMORY: bool = False  # Cloud Run에서는 True
-    
     # PostgreSQL + pgvector 설정 (LangChain 데이터 레이어)
     # Cloud SQL 연결 문자열 형식:
     # - 로컬: postgresql://user:pass@localhost:5432/dbname
     # - Cloud SQL (Unix Socket): postgresql://user:pass@/dbname?host=/cloudsql/project:region:instance
     DATABASE_URL: Optional[str] = None
-    USE_LANGCHAIN_STORE: bool = False  # True면 LangChain + pgvector, False면 ChromaDB
     
     # Cloud SQL 개별 환경 변수 (Secret Manager 지원)
     DB_HOST: Optional[str] = None  # /cloudsql/project:region:instance

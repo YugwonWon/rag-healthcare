@@ -92,9 +92,7 @@ scheduler = TaskScheduler()
 async def check_medication_reminders():
     """복약 알림 체크 태스크"""
     from app.healthcare import MedicationReminder
-    from app.vector_store import get_chroma_handler
     
-    chroma = get_chroma_handler()
     reminder = MedicationReminder()
     
     # 모든 활성 환자 조회 (간단한 구현)

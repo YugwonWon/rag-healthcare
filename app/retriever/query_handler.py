@@ -6,9 +6,7 @@ v2: LangGraph 기반 상태 머신으로 리팩토링
 - 의도 분류 → 쿼리 재작성 → 검색(벡터 + GraphRAG) → 응답 생성
 - 기존 process_query() 인터페이스 유지 (하위 호환)
 
-데이터 레이어:
-- USE_LANGCHAIN_STORE=True: LangChain + pgvector (Cloud SQL)
-- USE_LANGCHAIN_STORE=False: ChromaDB (기본값)
+데이터 레이어: LangChain + pgvector (Cloud SQL)
 """
 
 from datetime import datetime, timedelta
@@ -16,7 +14,7 @@ from typing import Optional, Dict, Any
 
 from app.config import settings, prompts
 from app.model import get_llm
-from app.vector_store import get_chroma_handler
+from app.langchain_store import get_langchain_store
 from app.utils import get_kst_now, get_kst_datetime_str
 from app.preprocessing import (
     HealthSignalDetector,
@@ -27,10 +25,6 @@ from app.preprocessing.health_signal_detector import RiskLevel
 from app.graph import ConversationState, Intent
 from app.graph.graph import get_conversation_graph
 from app.logger import get_logger
-
-# LangChain 스토어 (선택적)
-if settings.USE_LANGCHAIN_STORE:
-    from app.langchain_store import get_langchain_store
 
 logger = get_logger(__name__)
 
@@ -52,16 +46,9 @@ class RAGQueryHandler:
         """
         self._llm = get_llm()
         
-        # 데이터 스토어 선택 (환경변수 기반)
-        self._use_langchain = settings.USE_LANGCHAIN_STORE
-        if self._use_langchain:
-            self._store = get_langchain_store()
-            self._chroma = None
-            logger.info("LangChain 데이터 스토어 사용 (pgvector)")
-        else:
-            self._store = None
-            self._chroma = get_chroma_handler()
-            logger.info("ChromaDB 데이터 스토어 사용")
+        # 데이터 스토어 (pgvector)
+        self._store = get_langchain_store()
+        logger.info("LangChain 데이터 스토어 사용 (pgvector)")
         
         # LangGraph 컴파일된 그래프
         self._graph = get_conversation_graph()
@@ -138,42 +125,21 @@ class RAGQueryHandler:
     # ==========================================
     
     async def _get_profile(self, nickname: str) -> dict:
-        """프로필 조회 (LangChain/ChromaDB 분기)"""
-        if self._use_langchain:
-            return await self._store.get_profile(nickname)
-        else:
-            return self._chroma.get_patient_profile(nickname)
+        """프로필 조회"""
+        return await self._store.get_profile(nickname)
     
     def _search_documents(self, query: str, k: int = 5) -> Any:
-        """문서 검색 (LangChain/ChromaDB 분기)"""
-        if self._use_langchain:
-            return self._store.search_documents(query, k=k)
-        else:
-            return self._chroma.search_documents(query)
+        """문서 검색"""
+        return self._store.search_documents(query, k=k)
     
     def _get_conversations(self, nickname: str, query: str, n_results: int = 3) -> Any:
-        """대화 기록 조회 (LangChain/ChromaDB 분기)"""
-        if self._use_langchain:
-            return self._store.get_recent_conversations(nickname, limit=n_results)
-        else:
-            return self._chroma.get_user_conversations(
-                nickname=nickname,
-                query=query,
-                n_results=n_results
-            )
+        """대화 기록 조회"""
+        return self._store.get_recent_conversations(nickname, limit=n_results)
     
     def _save_conversation(self, nickname: str, user_message: str, 
                           assistant_response: str, metadata: dict = None):
-        """대화 저장 (LangChain/ChromaDB 분기)"""
-        if self._use_langchain:
-            self._store.save_conversation(nickname, user_message, assistant_response)
-        else:
-            self._chroma.add_conversation(
-                nickname=nickname,
-                user_message=user_message,
-                assistant_response=assistant_response,
-                metadata=metadata
-            )
+        """대화 저장"""
+        self._store.save_conversation(nickname, user_message, assistant_response)
     
     # ==========================================
     # 대화 요약 관련 메서드
@@ -188,7 +154,7 @@ class RAGQueryHandler:
         2. 요약 이후의 최근 대화(최대 5개)를 추가
         3. 10번 대화마다 백그라운드에서 요약 갱신
         """
-        if not self._use_langchain:
+        if not self._store:
             return ""
         
         try:
@@ -227,7 +193,7 @@ class RAGQueryHandler:
         
         LLM을 사용해 오래된 대화를 요약하고 DB에 저장
         """
-        if not self._use_langchain:
+        if not self._store:
             return
         
         try:
@@ -375,10 +341,8 @@ class RAGQueryHandler:
         else:
             time_of_day = "저녁"
         
-        # 최근 활동 조회 (ChromaDB 사용 시에만)
+        # 최근 활동 조회
         recent_activities = []
-        if self._chroma:
-            recent_activities = self._chroma.get_recent_activities(nickname, hours=48)
         
         # 개인화된 인사말 생성
         previous_activity_followup = ""
@@ -446,55 +410,33 @@ class RAGQueryHandler:
         return "\n".join(info_lines) if info_lines else "기본 정보만 등록됨"
     
     def _format_retrieved_context(self, results: Any) -> str:
-        """검색된 문서 컨텍스트 포맷팅 (LangChain/ChromaDB 분기)"""
+        """검색된 문서 컨텍스트 포맷팅"""
         if not results:
             return "관련 의료 정보 없음"
         
         context_parts = []
         
-        # LangChain 형식: list[dict] with "content", "score"
-        if self._use_langchain and isinstance(results, list):
+        if isinstance(results, list):
             for i, doc in enumerate(results[:3], 1):
                 content = doc.get("content", "")[:300]
                 context_parts.append(f"[{i}] {content}")
-        # ChromaDB 형식: dict with "documents"
-        elif isinstance(results, dict) and results.get("documents"):
-            documents = results["documents"][0] if results["documents"] else []
-            for i, doc in enumerate(documents[:3], 1):
-                context_parts.append(f"[{i}] {doc[:300]}")
         
         return "\n\n".join(context_parts) if context_parts else "관련 의료 정보 없음"
     
     def _format_conversation_history(self, results: Any) -> str:
-        """대화 기록 포맷팅 (LangChain/ChromaDB 분기)"""
+        """대화 기록 포맷팅"""
         if not results:
             return "이전 대화 없음"
         
         history_parts = []
         
-        # LangChain 형식: list[dict] with "role", "content"
-        if self._use_langchain and isinstance(results, list):
+        if isinstance(results, list):
             for msg in results[-6:]:  # 최근 3쌍 (6개 메시지)
                 role = "사용자" if msg.get("role") == "user" else "AI"
                 content = msg.get("content", "")[:200]
                 history_parts.append(f"{role}: {content}")
-            return "\n".join(history_parts) if history_parts else "이전 대화 없음"
         
-        # ChromaDB 형식: dict with "documents"
-        documents = results.get("documents", [])
-        if isinstance(documents, list) and len(documents) > 0:
-            if isinstance(documents[0], list):
-                documents = documents[0]
-        
-        if not documents:
-            return "이전 대화 없음"
-        
-        history_parts = []
-        for doc in documents[:3]:  # 최근 3개 대화만 포함 (응답 속도 최적화)
-            # 각 대화도 200자로 제한
-            history_parts.append(doc[:200] if len(doc) > 200 else doc)
-        
-        return "\n---\n".join(history_parts)
+        return "\n".join(history_parts) if history_parts else "이전 대화 없음"
     
     def _format_activity_summary(self, activity_data: dict) -> str:
         """활동 요약 포맷팅"""

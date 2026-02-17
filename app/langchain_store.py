@@ -71,7 +71,7 @@ class LangChainDataStore:
         self.connection_string = connection_string or settings.database_url
         
         if not self.connection_string:
-            logger.warning("DATABASE_URL이 설정되지 않음. ChromaDB 폴백 모드로 동작합니다.")
+            logger.warning("DATABASE_URL이 설정되지 않음. pgvector를 사용할 수 없습니다.")
             self._use_postgres = False
             self._initialized = True
             return
@@ -103,7 +103,7 @@ class LangChainDataStore:
         # 2. 벡터 스토어 (pgvector)
         self.vectorstore = PGVector(
             connection=self.connection_string,
-            collection_name=settings.CHROMA_COLLECTION_NAME,
+            collection_name="healthcare_rag",
             embeddings=self.embeddings,
         )
         

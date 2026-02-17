@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.utils import get_kst_now, get_kst_datetime_str
 from app.model import get_llm
-from app.vector_store import get_chroma_handler
+from app.langchain_store import get_langchain_store
 from app.retriever import get_query_handler
 from app.healthcare import SymptomTracker, MedicationReminder, DailyRoutineManager
 from app.logger import init_logging, get_logger, log_startup_info, log_request, log_response
@@ -24,16 +24,14 @@ from app.logger import init_logging, get_logger, log_startup_info, log_request, 
 init_logging()
 logger = get_logger(__name__)
 
-# LangChain 스토어 (선택적 - PostgreSQL 사용 시)
-if settings.USE_LANGCHAIN_STORE:
-    from app.langchain_store import get_langchain_store
-    _langchain_store = None
-    
-    def get_store():
-        global _langchain_store
-        if _langchain_store is None:
-            _langchain_store = get_langchain_store()
-        return _langchain_store
+# LangChain 스토어 (pgvector)
+_langchain_store = None
+
+def get_store():
+    global _langchain_store
+    if _langchain_store is None:
+        _langchain_store = get_langchain_store()
+    return _langchain_store
 
 
 # 요청/응답 모델
@@ -104,119 +102,83 @@ async def lifespan(app: FastAPI):
     """애플리케이션 생명주기 관리"""
     # 시작 시 로그 기록
     config_info = {
-        "CHROMA_PERSIST_DIR": settings.CHROMA_PERSIST_DIR,
         "OLLAMA_MODEL": settings.OLLAMA_MODEL,
         "EMBEDDING_MODEL": settings.EMBEDDING_MODEL,
         "RAG_TOP_K": settings.RAG_TOP_K,
-        "CHROMA_IN_MEMORY": settings.CHROMA_IN_MEMORY,
-        "USE_LANGCHAIN_STORE": settings.USE_LANGCHAIN_STORE,
     }
     log_startup_info(logger, settings.APP_NAME, settings.APP_VERSION, config_info)
     
-    # ChromaDB 초기화 (기본 벡터 스토어)
-    chroma = get_chroma_handler()
-    stats = chroma.get_collection_stats()
-    logger.info(f"📚 컨렉션 통계: 문서={stats['documents']}, 대화={stats['conversations']}, 프로필={stats['patient_profiles']}")
+    # LangChain store 연결 풀 초기화 (PostgreSQL)
+    store = get_store()
+    await store.init_pool()
+    logger.info("🐘 PostgreSQL 연결 풀 초기화 완료")
     
-    # LangChain store 연결 풀 초기화 (PostgreSQL 사용 시)
-    if settings.USE_LANGCHAIN_STORE:
-        store = get_store()
-        await store.init_pool()
-        logger.info("🐘 PostgreSQL 연결 풀 초기화 완료")
+    # pgvector에 문서가 0개이면 healthcare_docs 자동 로드
+    try:
+        pg_stats = await store.get_stats()
+        doc_count = pg_stats.get("documents", 0)
+        logger.info(f"📚 pgvector 문서 수: {doc_count}")
         
-        # pgvector에 문서가 0개이면 healthcare_docs 자동 로드
-        try:
-            pg_stats = await store.get_stats()
-            doc_count = pg_stats.get("documents", 0)
-            logger.info(f"📚 pgvector 문서 수: {doc_count}")
+        if doc_count == 0:
+            from pathlib import Path
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+            from langchain_community.document_loaders import TextLoader
             
-            if doc_count == 0:
-                from pathlib import Path
-                from langchain_text_splitters import RecursiveCharacterTextSplitter
-                from langchain_community.document_loaders import TextLoader
-                
-                docs_dir = Path(__file__).parent.parent / "data" / "healthcare_docs"
-                conv_dir = Path(__file__).parent.parent / "data" / "conversations"
-                
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1000, chunk_overlap=200,
-                    separators=["\n---\n", "\n\n", "\n", " "]
-                )
-                
-                all_docs = []
-                
-                # healthcare_docs 로드
-                if docs_dir.exists():
-                    txt_files = sorted(docs_dir.glob("*.txt"))
-                    logger.info(f"📂 healthcare_docs 자동 로드: {len(txt_files)}개 파일")
-                    for txt_file in txt_files:
-                        try:
-                            loader = TextLoader(str(txt_file), encoding="utf-8")
-                            docs = loader.load()
-                            for doc in docs:
-                                doc.metadata["category"] = "healthcare_docs"
-                                doc.metadata["source_name"] = txt_file.stem
-                            all_docs.extend(splitter.split_documents(docs))
-                        except Exception as e:
-                            logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
-                
-                # conversations 로드
-                if conv_dir.exists():
-                    conv_files = sorted(conv_dir.glob("*.txt"))
-                    logger.info(f"📂 conversations 자동 로드: {len(conv_files)}개 파일")
-                    for txt_file in conv_files:
-                        try:
-                            loader = TextLoader(str(txt_file), encoding="utf-8")
-                            docs = loader.load()
-                            for doc in docs:
-                                doc.metadata["category"] = "conversations"
-                                doc.metadata["source_name"] = txt_file.stem
-                            all_docs.extend(splitter.split_documents(docs))
-                        except Exception as e:
-                            logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
-                
-                # pgvector에 배치 로드
-                if all_docs:
-                    batch_size = 50
-                    loaded = 0
-                    for i in range(0, len(all_docs), batch_size):
-                        batch = all_docs[i:i + batch_size]
-                        try:
-                            store.vectorstore.add_documents(batch)
-                            loaded += len(batch)
-                        except Exception as e:
-                            logger.warning(f"배치 로드 실패: {e}")
-                    logger.info(f"✅ pgvector 자동 로드 완료: {loaded}/{len(all_docs)}개 청크")
-        except Exception as e:
-            logger.warning(f"pgvector 문서 자동 로드 실패 (비필수): {e}")
-    else:
-        # ChromaDB 사용 시 문서가 0개이면 자동 로드
-        if stats['documents'] == 0:
-            try:
-                from pathlib import Path
-                from scripts.load_healthcare_docs import load_text_file
-                
-                docs_dir = Path(__file__).parent.parent / "data" / "healthcare_docs"
-                if docs_dir.exists():
-                    txt_files = list(docs_dir.glob("*.txt"))
-                    logger.info(f"📂 healthcare_docs 자동 로드 시작: {len(txt_files)}개 파일")
-                    total_chunks = 0
-                    for txt_file in txt_files:
-                        try:
-                            chunks = load_text_file(txt_file)
-                            if chunks:
-                                documents = [c["text"] for c in chunks]
-                                metadatas = [c["metadata"] for c in chunks]
-                                ids = [f"{txt_file.stem}_{i}" for i in range(len(chunks))]
-                                chroma.add_documents(documents=documents, metadatas=metadatas, ids=ids)
-                                total_chunks += len(chunks)
-                        except Exception as e:
-                            logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
-                    logger.info(f"✅ healthcare_docs 자동 로드 완료: {total_chunks}개 청크")
-            except Exception as e:
-                logger.warning(f"healthcare_docs 자동 로드 실패 (비필수): {e}")
-    
-    # Knowledge Graph 초기화 (GraphRAG)
+            docs_dir = Path(__file__).parent.parent / "data" / "healthcare_docs"
+            conv_dir = Path(__file__).parent.parent / "data" / "conversations"
+            
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000, chunk_overlap=200,
+                separators=["\n---\n", "\n\n", "\n", " "]
+            )
+            
+            all_docs = []
+            
+            # healthcare_docs 로드
+            if docs_dir.exists():
+                txt_files = sorted(docs_dir.glob("*.txt"))
+                logger.info(f"📂 healthcare_docs 자동 로드: {len(txt_files)}개 파일")
+                for txt_file in txt_files:
+                    try:
+                        loader = TextLoader(str(txt_file), encoding="utf-8")
+                        docs = loader.load()
+                        for doc in docs:
+                            doc.metadata["category"] = "healthcare_docs"
+                            doc.metadata["source_name"] = txt_file.stem
+                        all_docs.extend(splitter.split_documents(docs))
+                    except Exception as e:
+                        logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
+            
+            # conversations 로드
+            if conv_dir.exists():
+                conv_files = sorted(conv_dir.glob("*.txt"))
+                logger.info(f"📂 conversations 자동 로드: {len(conv_files)}개 파일")
+                for txt_file in conv_files:
+                    try:
+                        loader = TextLoader(str(txt_file), encoding="utf-8")
+                        docs = loader.load()
+                        for doc in docs:
+                            doc.metadata["category"] = "conversations"
+                            doc.metadata["source_name"] = txt_file.stem
+                        all_docs.extend(splitter.split_documents(docs))
+                    except Exception as e:
+                        logger.warning(f"파일 로드 실패: {txt_file.name} - {e}")
+            
+            # pgvector에 배치 로드
+            if all_docs:
+                batch_size = 50
+                loaded = 0
+                for i in range(0, len(all_docs), batch_size):
+                    batch = all_docs[i:i + batch_size]
+                    try:
+                        store.vectorstore.add_documents(batch)
+                        loaded += len(batch)
+                    except Exception as e:
+                        logger.warning(f"배치 로드 실패: {e}")
+                logger.info(f"✅ pgvector 자동 로드 완료: {loaded}/{len(all_docs)}개 청크")
+    except Exception as e:
+        logger.warning(f"pgvector 문서 자동 로드 실패 (비필수): {e}")
+
     try:
         from app.knowledge_graph.health_kg import get_health_kg
         kg = get_health_kg()
@@ -227,10 +189,9 @@ async def lifespan(app: FastAPI):
     yield
     
     # 종료 시
-    if settings.USE_LANGCHAIN_STORE:
-        store = get_store()
-        await store.close_pool()
-        logger.info("🐘 PostgreSQL 연결 풀 종료")
+    store = get_store()
+    await store.close_pool()
+    logger.info("🐘 PostgreSQL 연결 풀 종료")
     logger.info("👋 서버 종료...")
 
 
@@ -272,10 +233,6 @@ async def log_requests(request: Request, call_next):
 
 
 # 의존성
-def get_chroma():
-    return get_chroma_handler()
-
-
 def get_handler():
     return get_query_handler()
 
@@ -292,24 +249,22 @@ async def root():
 
 
 @app.get("/health", response_model=HealthStatusResponse)
-async def health_check(chroma=Depends(get_chroma)):
+async def health_check():
     """
     헬스 체크 엔드포인트
     """
-    stats = chroma.get_collection_stats()
+    stats = {"documents": 0, "conversations": 0, "patient_profiles": 0}
     
-    # LangChain (pgvector) 사용 시 pgvector 문서 수로 덮어쓰기
-    if settings.USE_LANGCHAIN_STORE:
-        try:
-            store = get_store()
-            pg_stats = await store.get_stats()
-            if pg_stats.get("postgres_enabled") and "error" not in pg_stats:
-                stats["documents"] = pg_stats.get("documents", 0)
-                stats["conversations"] = pg_stats.get("conversations", 0)
-                stats["patient_profiles"] = pg_stats.get("profiles", 0)
-                stats["store"] = "pgvector"
-        except Exception as e:
-            logger.warning(f"pgvector 통계 조회 실패, ChromaDB 통계 사용: {e}")
+    try:
+        store = get_store()
+        pg_stats = await store.get_stats()
+        if pg_stats.get("postgres_enabled") and "error" not in pg_stats:
+            stats["documents"] = pg_stats.get("documents", 0)
+            stats["conversations"] = pg_stats.get("conversations", 0)
+            stats["patient_profiles"] = pg_stats.get("profiles", 0)
+            stats["store"] = "pgvector"
+    except Exception as e:
+        logger.warning(f"pgvector 통계 조회 실패: {e}")
     
     # LLM 가용성 체크
     llm = get_llm()
@@ -418,14 +373,9 @@ async def get_greeting(
 
 
 @app.post("/profile")
-async def save_profile(
-    request: PatientProfileRequest,
-    chroma=Depends(get_chroma)
-):
+async def save_profile(request: PatientProfileRequest):
     """
-    환자 프로필 저장
-    USE_LANGCHAIN_STORE=true: PostgreSQL에 저장 (Cloud SQL)
-    USE_LANGCHAIN_STORE=false: ChromaDB에 저장
+    환자 프로필 저장 (PostgreSQL)
     """
     try:
         profile_data = {
@@ -441,16 +391,12 @@ async def save_profile(
         # None 값 제거
         profile_data = {k: v for k, v in profile_data.items() if v is not None}
         
-        # 스토어 선택 (환경변수 기반)
-        if settings.USE_LANGCHAIN_STORE:
-            store = get_store()
-            success = await store.save_profile(request.nickname, profile_data)
-            if not success:
-                raise Exception("PostgreSQL 저장 실패")
-            logger.info(f"프로필 저장 (PostgreSQL): {request.nickname}")
-        else:
-            chroma.save_patient_profile(request.nickname, profile_data)
-            logger.info(f"프로필 저장 (ChromaDB): {request.nickname}")
+        # 스토어 저장 (pgvector)
+        store = get_store()
+        success = await store.save_profile(request.nickname, profile_data)
+        if not success:
+            raise Exception("PostgreSQL 저장 실패")
+        logger.info(f"프로필 저장 (PostgreSQL): {request.nickname}")
         
         # 루틴 초기화
         routine_manager.initialize_routine(request.nickname)
@@ -459,7 +405,7 @@ async def save_profile(
             "status": "success",
             "message": f"{request.nickname}님의 프로필이 저장되었습니다.",
             "profile": profile_data,
-            "store": "postgresql" if settings.USE_LANGCHAIN_STORE else "chromadb"
+            "store": "postgresql"
         }
     
     except Exception as e:
@@ -468,52 +414,44 @@ async def save_profile(
 
 
 @app.get("/profile/{nickname}")
-async def get_profile(nickname: str, chroma=Depends(get_chroma)):
+async def get_profile(nickname: str):
     """
-    환자 프로필 조회
-    USE_LANGCHAIN_STORE=true: PostgreSQL에서 조회
-    USE_LANGCHAIN_STORE=false: ChromaDB에서 조회
+    환자 프로필 조회 (PostgreSQL)
     """
-    if settings.USE_LANGCHAIN_STORE:
-        store = get_store()
-        profile = await store.get_profile(nickname)
-    else:
-        profile = chroma.get_patient_profile(nickname)
+    store = get_store()
+    profile = await store.get_profile(nickname)
     
     if not profile:
         raise HTTPException(status_code=404, detail=f"{nickname}님의 프로필을 찾을 수 없습니다.")
     
-    return {"profile": profile, "store": "postgresql" if settings.USE_LANGCHAIN_STORE else "chromadb"}
+    return {"profile": profile, "store": "postgresql"}
 
 
 @app.get("/history/{nickname}")
 async def get_conversation_history(
     nickname: str,
     limit: int = 10,
-    chroma=Depends(get_chroma)
 ):
     """
     대화 기록 조회
     """
-    results = chroma.get_user_conversations(nickname, n_results=limit)
+    store = get_store()
+    results = store.get_recent_conversations(nickname, limit=limit)
     
     return {
         "nickname": nickname,
-        "conversations": results.get("documents", []),
-        "metadatas": results.get("metadatas", [])
+        "conversations": results,
     }
 
 
 @app.delete("/history/{nickname}")
-async def delete_conversation_history(
-    nickname: str,
-    chroma=Depends(get_chroma)
-):
+async def delete_conversation_history(nickname: str):
     """
     사용자의 대화 기록 삭제
     """
     try:
-        deleted_count = chroma.delete_user_conversations(nickname)
+        store = get_store()
+        deleted_count = await store.delete_conversations(nickname)
         logger.info(f"대화 기록 삭제 | nickname={nickname} | count={deleted_count}")
         return {
             "success": True,
@@ -527,15 +465,21 @@ async def delete_conversation_history(
 
 
 @app.post("/documents")
-async def add_documents(request: DocumentRequest, chroma=Depends(get_chroma)):
+async def add_documents(request: DocumentRequest):
     """
     헬스케어 문서 추가
     """
     try:
-        chroma.add_documents(
-            documents=request.documents,
-            metadatas=request.metadatas
-        )
+        store = get_store()
+        from langchain_core.documents import Document
+        docs = [
+            Document(
+                page_content=doc,
+                metadata=request.metadatas[i] if request.metadatas and i < len(request.metadatas) else {}
+            )
+            for i, doc in enumerate(request.documents)
+        ]
+        store.vectorstore.add_documents(docs)
         
         return {
             "status": "success",
@@ -547,11 +491,15 @@ async def add_documents(request: DocumentRequest, chroma=Depends(get_chroma)):
 
 
 @app.get("/stats")
-async def get_stats(chroma=Depends(get_chroma)):
+async def get_stats():
     """
     시스템 통계 조회
     """
-    stats = chroma.get_collection_stats()
+    store = get_store()
+    try:
+        stats = await store.get_stats()
+    except Exception:
+        stats = {}
     
     return {
         "database_stats": stats,
