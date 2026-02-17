@@ -108,12 +108,59 @@ def convert_to_gguf(model_path: str, output_path: str, quantization: str = "q4_k
     return output_path
 
 
-def create_ollama_modelfile(gguf_path: str, output_path: str, model_name: str):
-    """Ollama Modelfile 생성"""
-    modelfile_content = f'''# EXAONE 4.0 상담 모델 - 파인튜닝됨
+def detect_model_type(base_model: str) -> str:
+    """베이스 모델명에서 모델 타입 자동 감지"""
+    lower = base_model.lower()
+    if "kanana" in lower:
+        return "kanana"
+    elif "exaone" in lower:
+        return "exaone"
+    elif "qwen" in lower:
+        return "qwen"
+    return "generic"
+
+
+def create_ollama_modelfile(gguf_path: str, output_path: str, model_name: str, model_type: str = "exaone"):
+    """Ollama Modelfile 생성 (모델 타입에 따라 템플릿 분기)"""
+    
+    if model_type == "kanana":
+        modelfile_content = f'''# Kanana 상담 모델 - 파인튜닝됨
 FROM {gguf_path}
 
-# 시스템 프롬프트 (한국어 상담)
+SYSTEM """당신은 노인건강전문상담사입니다.
+- 3~4문장으로 간결하게 답변하세요
+- 일상에서 실천할 수 있는 건강 습관을 안내하세요
+- 심각한 경우에만 병원 진료를 권유하세요
+
+[금지사항]
+절대로 "추가로 궁금한 점이나 불편한 점이 있으시면 언제든지 말씀해 주세요"라고 말하지 마세요.
+마무리 인사 없이 핵심 내용만 전달하세요."""
+
+PARAMETER temperature 0.7
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.1
+PARAMETER num_predict 512
+PARAMETER num_ctx 4096
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "추가로 궁금한"
+PARAMETER stop "궁금한 점이나"
+PARAMETER stop "언제든지 말씀"
+PARAMETER stop "도움이 필요하면 말씀"
+
+TEMPLATE """{{{{ if .System }}}}<|im_start|>system
+{{{{ .System }}}}<|im_end|>
+{{{{ end }}}}{{{{ if .Prompt }}}}<|im_start|>user
+{{{{ .Prompt }}}}<|im_end|>
+{{{{ end }}}}<|im_start|>assistant
+"""
+'''
+    else:
+        # EXAONE (기존)
+        modelfile_content = f'''# EXAONE 4.0 상담 모델 - 파인튜닝됨
+FROM {gguf_path}
+
 SYSTEM """당신은 노인건강전문상담사입니다.
 반드시 한국어로만 응답하세요.
 - 2~3문장으로 간결하게 답변
@@ -121,7 +168,6 @@ SYSTEM """당신은 노인건강전문상담사입니다.
 - 일상에서 실천할 수 있는 건강 습관 안내
 - 심각한 경우에만 병원 진료 권유"""
 
-# 파라미터 설정
 PARAMETER temperature 0.1
 PARAMETER top_p 0.9
 PARAMETER top_k 40
@@ -129,7 +175,6 @@ PARAMETER repeat_penalty 1.1
 PARAMETER num_predict 256
 PARAMETER stop "[|endofturn|]"
 
-# 템플릿 (EXAONE 형식 - 비추론 모드)
 TEMPLATE """{{{{- if .System }}}}[|system|]{{{{ .System }}}}[|endofturn|]
 {{{{- end }}}}
 {{{{- range .Messages }}}}
@@ -144,7 +189,7 @@ TEMPLATE """{{{{- if .System }}}}[|system|]{{{{ .System }}}}[|endofturn|]
     with open(modelfile_path, "w", encoding="utf-8") as f:
         f.write(modelfile_content)
     
-    print(f"✅ Modelfile 생성: {modelfile_path}")
+    print(f"✅ Modelfile 생성: {modelfile_path} (타입: {model_type})")
     print(f"\n📝 Ollama 등록 명령어:")
     print(f"   ollama create {model_name} -f {modelfile_path}")
     
@@ -198,9 +243,10 @@ def main():
         gguf_path = str(Path(args.output_dir) / gguf_filename)
         gguf_path = convert_to_gguf(merged_path, gguf_path, args.quantization)
     
-    # 3. Ollama Modelfile 생성
+    # 3. Ollama Modelfile 생성 (모델 타입 자동 감지)
     if gguf_path:
-        create_ollama_modelfile(gguf_path, args.output_dir, args.model_name)
+        model_type = detect_model_type(args.base_model)
+        create_ollama_modelfile(gguf_path, args.output_dir, args.model_name, model_type)
     
     print("\n" + "=" * 60)
     print("✅ 변환 완료!")

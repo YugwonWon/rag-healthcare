@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from app.config import settings
-from app.vector_store import get_chroma_handler
 from app.utils import get_kst_now, KST
 
 
@@ -85,7 +84,6 @@ class DailyRoutineManager:
     ]
     
     def __init__(self):
-        self._chroma = get_chroma_handler()
         self._routines: dict[str, list[RoutineItem]] = {}
         self._activity_logs: dict[str, list[ActivityLog]] = {}
     
@@ -222,19 +220,8 @@ class DailyRoutineManager:
             self._activity_logs[nickname] = []
         self._activity_logs[nickname].append(log)
         
-        # ChromaDB에 저장
-        self._chroma.add_conversation(
-            nickname=nickname,
-            user_message=f"{activity_type.value} {status.value}",
-            assistant_response=f"✅ {activity_type.value} 기록됨 ({now.strftime('%H:%M')})",
-            metadata={
-                "type": "activity_log",
-                "activity_type": activity_type.value,
-                "status": status.value,
-                "notes": notes,
-                "mood_after": mood_after
-            }
-        )
+        # 활동 로그 저장 (인메모리)
+        # TODO: pgvector 스토어로 이전 가능
         
         return log
     
@@ -251,33 +238,20 @@ class DailyRoutineManager:
         """
         target_date = (date or get_kst_now()).strftime("%Y-%m-%d")
         
-        results = self._chroma.get_user_conversations(
-            nickname=nickname,
-            query="활동",
-            n_results=50
-        )
-        
+        # 인메모리 활동 로그에서 요약
         completed = []
         skipped = []
         pending = []
         
-        if results and results.get("metadatas"):
-            metadatas = results.get("metadatas", [])
-            if isinstance(metadatas[0], list):
-                metadatas = metadatas[0]
-            
-            for metadata in metadatas:
-                if metadata.get("type") == "activity_log":
-                    if metadata.get("date", "") == target_date:
-                        status = metadata.get("status", "")
-                        activity = metadata.get("activity_type", "")
-                        
-                        if status == CompletionStatus.COMPLETED.value:
-                            completed.append(activity)
-                        elif status == CompletionStatus.SKIPPED.value:
-                            skipped.append(activity)
-                        else:
-                            pending.append(activity)
+        logs = self._activity_logs.get(nickname, [])
+        for log in logs:
+            if log.actual_time and log.actual_time.strftime("%Y-%m-%d") == target_date:
+                if log.status == CompletionStatus.COMPLETED:
+                    completed.append(log.activity_type.value)
+                elif log.status == CompletionStatus.SKIPPED:
+                    skipped.append(log.activity_type.value)
+                else:
+                    pending.append(log.activity_type.value)
         
         routine = self.get_routine(nickname)
         total_required = sum(1 for r in routine if r.is_required)
@@ -343,16 +317,8 @@ class DailyRoutineManager:
         routine: list[RoutineItem]
     ) -> None:
         """루틴을 프로필에 저장"""
-        profile = self._chroma.get_patient_profile(nickname) or {}
-        
-        routine_summary = ", ".join([
-            f"{r.activity_type.value}({r.scheduled_time.strftime('%H:%M')})"
-            for r in routine[:5]  # 처음 5개만 저장
-        ])
-        
-        profile["routine_summary"] = routine_summary
-        profile["has_routine"] = "yes"
-        self._chroma.save_patient_profile(nickname, profile)
+        # TODO: pgvector 스토어로 이전 가능
+        pass
     
     def get_activity_suggestions(self, nickname: str) -> list[str]:
         """

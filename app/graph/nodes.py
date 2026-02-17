@@ -8,16 +8,12 @@ from app.graph.intent_classifier import classify_intent
 from app.graph.query_rewriter import rewrite_query, extract_topic
 from app.config import settings, prompts
 from app.model import get_llm
-from app.vector_store import get_chroma_handler
+from app.langchain_store import get_langchain_store
 from app.preprocessing import HealthSignalDetector
 from app.utils import get_kst_now, get_kst_datetime_str
 from app.logger import get_logger
 
 logger = get_logger(__name__)
-
-# LangChain 스토어 (선택적)
-if settings.USE_LANGCHAIN_STORE:
-    from app.langchain_store import get_langchain_store
 
 # 전처리 모듈 (지연 초기화)
 _health_detector: HealthSignalDetector | None = None
@@ -59,12 +55,8 @@ async def preprocess_node(state: ConversationState) -> dict:
         }
 
     # 환자 프로필 조회
-    if settings.USE_LANGCHAIN_STORE:
-        store = get_langchain_store()
-        patient_profile = await store.get_profile(nickname)
-    else:
-        chroma = get_chroma_handler()
-        patient_profile = chroma.get_patient_profile(nickname) or {}
+    store = get_langchain_store()
+    patient_profile = await store.get_profile(nickname)
 
     # 대화 이력 로딩 (시간순, 최근 N개)
     conversation_history = await _load_conversation_history(nickname)
@@ -93,51 +85,8 @@ async def preprocess_node(state: ConversationState) -> dict:
 
 async def _load_conversation_history(nickname: str) -> list[dict]:
     """대화 이력을 시간순으로 로딩한다."""
-    if settings.USE_LANGCHAIN_STORE:
-        store = get_langchain_store()
-        return store.get_recent_conversations(nickname, limit=5)
-
-    # ChromaDB: 시간순으로 최근 대화 가져오기
-    chroma = get_chroma_handler()
-    results = chroma.get_user_conversations(nickname, n_results=10)
-
-    if not results or not results.get("metadatas"):
-        return []
-
-    # 메타데이터에서 timestamp로 정렬
-    entries = []
-    metadatas = results.get("metadatas", [])
-    documents = results.get("documents", [])
-
-    for i, meta in enumerate(metadatas):
-        timestamp = meta.get("timestamp", "")
-        user_msg = meta.get("user_message", "")
-        doc = documents[i] if i < len(documents) else ""
-
-        # 문서에서 AI 응답 추출
-        ai_msg = ""
-        if doc and "AI:" in doc:
-            ai_msg = doc.split("AI:", 1)[1].strip()
-        elif doc and "ai:" in doc.lower():
-            parts = doc.lower().split("ai:", 1)
-            ai_msg = doc[len(parts[0]) + 3:].strip()
-
-        if user_msg:
-            entries.append({
-                "role": "user",
-                "content": user_msg,
-                "timestamp": timestamp,
-            })
-        if ai_msg:
-            entries.append({
-                "role": "assistant",
-                "content": ai_msg,
-                "timestamp": timestamp,
-            })
-
-    # 시간순 정렬 후 최근 10개 메시지만
-    entries.sort(key=lambda x: x.get("timestamp", ""))
-    return entries[-10:]
+    store = get_langchain_store()
+    return store.get_recent_conversations(nickname, limit=5)
 
 
 # ============================================================
@@ -207,20 +156,13 @@ def retrieve_node(state: ConversationState) -> dict:
 
     # 벡터 검색
     retrieved_docs = []
-    if settings.USE_LANGCHAIN_STORE:
-        store = get_langchain_store()
-        doc_results = store.search_documents(query, k=settings.RAG_TOP_K)
-        # 대화 예제(conversations)는 제외하고 healthcare_docs만 참고 정보로 사용
-        retrieved_docs = [
-            d.get("content", "")[:300] for d in doc_results
-            if d.get("metadata", {}).get("category") != "conversations"
-        ]
-    else:
-        chroma = get_chroma_handler()
-        doc_results = chroma.search_documents(query)
-        documents = doc_results.get("documents", [[]])
-        if documents and documents[0]:
-            retrieved_docs = [d[:300] for d in documents[0][:3]]
+    store = get_langchain_store()
+    doc_results = store.search_documents(query, k=settings.RAG_TOP_K)
+    # 대화 예제(conversations)는 제외하고 healthcare_docs만 참고 정보로 사용
+    retrieved_docs = [
+        d.get("content", "")[:300] for d in doc_results
+        if d.get("metadata", {}).get("category") != "conversations"
+    ]
 
     # GraphRAG 지식그래프 검색
     graph_context = ""
@@ -361,17 +303,8 @@ def save_conversation_node(state: ConversationState) -> dict:
     }
 
     try:
-        if settings.USE_LANGCHAIN_STORE:
-            store = get_langchain_store()
-            store.save_conversation(nickname, message, response)
-        else:
-            chroma = get_chroma_handler()
-            chroma.add_conversation(
-                nickname=nickname,
-                user_message=message,
-                assistant_response=response,
-                metadata=metadata,
-            )
+        store = get_langchain_store()
+        store.save_conversation(nickname, message, response)
         logger.debug(f"💾 대화 저장 완료 | nickname={nickname}")
     except Exception as e:
         logger.error(f"대화 저장 오류: {e}")

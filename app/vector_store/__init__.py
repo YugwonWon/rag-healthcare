@@ -1,7 +1,3 @@
 """
-Vector Store 모듈
+Vector Store 모듈 (deprecated - pgvector로 이전 완료)
 """
-
-from .chroma_handler import ChromaHandler, get_chroma_handler
-
-__all__ = ["ChromaHandler", "get_chroma_handler"]

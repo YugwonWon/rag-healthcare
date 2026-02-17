@@ -8,7 +8,8 @@ from typing import Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
-from app.vector_store import get_chroma_handler
+# TODO: pgvector 마이그레이션 시 LangChainStore 연동
+from app.utils import get_kst_now
 
 
 class SymptomSeverity(Enum):
@@ -67,7 +68,9 @@ class SymptomTracker:
     ALERT_KEYWORDS = ["쓰러", "넘어", "피", "의식", "숨", "응급", "119", "병원"]
     
     def __init__(self):
-        self._chroma = get_chroma_handler()
+        # in-memory 저장 (TODO: pgvector 마이그레이션)
+        self._symptom_logs: list[dict] = []
+        self._mood_logs: list[dict] = []
     
     def analyze_message(self, nickname: str, message: str) -> dict:
         """
@@ -186,16 +189,14 @@ class SymptomTracker:
         if notes:
             mood_text += f", 메모: {notes}"
         
-        self._chroma.add_conversation(
-            nickname=nickname,
-            user_message=f"기분 기록: {mood.value}",
-            assistant_response=mood_text,
-            metadata={
-                "type": "mood_record",
-                "mood": mood.value,
-                "energy_level": energy_level
-            }
-        )
+        self._mood_logs.append({
+            "nickname": nickname,
+            "type": "mood_record",
+            "mood": mood.value,
+            "energy_level": energy_level,
+            "text": mood_text,
+            "timestamp": get_kst_now().isoformat()
+        })
         
         return record
     
@@ -214,23 +215,12 @@ class SymptomTracker:
         Returns:
             증상 기록 리스트
         """
-        results = self._chroma.get_user_conversations(
-            nickname=nickname,
-            query="증상",
-            n_results=50
-        )
-        
-        symptom_records = []
-        if results and results.get("metadatas"):
-            metadatas = results.get("metadatas", [])
-            if isinstance(metadatas[0], list):
-                metadatas = metadatas[0]
-            
-            for metadata in metadatas:
-                if metadata.get("type") in ["symptom_record", "mood_record"]:
-                    symptom_records.append(metadata)
-        
-        return symptom_records
+        # in-memory에서 해당 사용자 기록 조회
+        symptom_records = [
+            log for log in self._symptom_logs + self._mood_logs
+            if log.get("nickname") == nickname
+        ]
+        return symptom_records[-50:]  # 최근 50건
     
     def _save_symptom_record(
         self,
@@ -239,12 +229,10 @@ class SymptomTracker:
         message: str
     ) -> None:
         """증상 기록 저장 (내부 메서드)"""
-        self._chroma.add_conversation(
-            nickname=nickname,
-            user_message=message,
-            assistant_response=f"증상 감지: {', '.join(symptoms)}",
-            metadata={
-                "type": "symptom_record",
-                "symptoms": ",".join(symptoms)
-            }
-        )
+        self._symptom_logs.append({
+            "nickname": nickname,
+            "type": "symptom_record",
+            "symptoms": ",".join(symptoms),
+            "message": message,
+            "timestamp": get_kst_now().isoformat()
+        })

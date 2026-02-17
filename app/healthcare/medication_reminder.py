@@ -10,7 +10,6 @@ from enum import Enum
 import json
 
 from app.config import settings, prompts
-from app.vector_store import get_chroma_handler
 from app.utils import get_kst_now, KST
 
 
@@ -60,7 +59,6 @@ class MedicationReminder:
     """복약 알림 관리자"""
     
     def __init__(self):
-        self._chroma = get_chroma_handler()
         self._medications: dict[str, list[Medication]] = {}  # nickname -> medications
     
     def add_medication(
@@ -198,18 +196,8 @@ class MedicationReminder:
             notes=notes
         )
         
-        # 기록 저장
-        self._chroma.add_conversation(
-            nickname=nickname,
-            user_message=f"{medication_name} 복용 완료",
-            assistant_response=f"💊 {medication_name} 복용 완료 기록됨 ({now.strftime('%H:%M')})",
-            metadata={
-                "type": "medication_log",
-                "medication_name": medication_name,
-                "taken_time": now.isoformat(),
-                "was_taken": True
-            }
-        )
+        # 기록 저장 (인메모리)
+        # TODO: pgvector 스토어로 이전 가능
         
         return log
     
@@ -228,22 +216,8 @@ class MedicationReminder:
         Returns:
             복약 기록 리스트
         """
-        results = self._chroma.get_user_conversations(
-            nickname=nickname,
-            query="복용",
-            n_results=50
-        )
-        
+        # TODO: pgvector 스토어로 이전 가능
         medication_logs = []
-        if results and results.get("metadatas"):
-            metadatas = results.get("metadatas", [])
-            if isinstance(metadatas[0], list):
-                metadatas = metadatas[0]
-            
-            for metadata in metadatas:
-                if metadata.get("type") == "medication_log":
-                    medication_logs.append(metadata)
-        
         return medication_logs
     
     def get_adherence_rate(
@@ -275,20 +249,8 @@ class MedicationReminder:
         medication: Medication
     ) -> None:
         """복약 정보를 프로필에 저장"""
-        profile = self._chroma.get_patient_profile(nickname) or {}
-        
-        medications_str = profile.get("medications", "")
-        if medications_str:
-            medications_list = medications_str.split(";")
-        else:
-            medications_list = []
-        
-        med_info = f"{medication.name}({medication.dosage})"
-        if med_info not in medications_list:
-            medications_list.append(med_info)
-        
-        profile["medications"] = ";".join(medications_list)
-        self._chroma.save_patient_profile(nickname, profile)
+        # TODO: pgvector 스토어로 이전 가능
+        pass
     
     def check_and_send_reminders(self, nickname: str) -> list[str]:
         """
