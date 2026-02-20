@@ -180,11 +180,12 @@ async def lifespan(app: FastAPI):
         logger.warning(f"pgvector 문서 자동 로드 실패 (비필수): {e}")
 
     try:
-        from app.knowledge_graph.health_kg import get_health_kg
-        kg = get_health_kg()
-        logger.info(f"🧠 Knowledge Graph 초기화 완료 | 노드={kg.graph.number_of_nodes()}, 엣지={kg.graph.number_of_edges()}")
+        from app.knowledge_graph.health_kg import get_neo4j_kg
+        kg = get_neo4j_kg()
+        stats = kg.get_stats()
+        logger.info(f"🧠 Neo4j Knowledge Graph 초기화 완료 | 노드={stats['node_count']}, 엣지={stats['edge_count']}")
     except Exception as e:
-        logger.warning(f"Knowledge Graph 초기화 실패 (비필수): {e}")
+        logger.warning(f"Neo4j Knowledge Graph 초기화 실패 (비필수): {e}")
     
     yield
     
