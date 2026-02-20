@@ -52,6 +52,12 @@ class ConversationState(TypedDict, total=False):
     detected_symptoms: list[str]           # 감지된 증상들
     emergency_keywords: list[str]          # 감지된 응급 키워드
 
+    # ── 대화 흐름 추적 ──
+    repeated_question: bool                # 반복 질문 감지 여부
+    topic_drifted: bool                    # 주제 이탈 감지 여부
+    medical_referral_given: bool           # 이번 세션에서 의료 권유 했는지
+    previous_topics: list[str]             # 이전 대화 주제들 (반복 감지용)
+
     # ── 응답 ──
     response: str                          # 최종 AI 응답
     system_prompt: str                     # 구성된 시스템 프롬프트
