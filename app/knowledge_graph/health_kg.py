@@ -98,16 +98,22 @@ class Neo4jHealthKG:
         return {"node_count": node_count, "edge_count": edge_count}
 
     def get_all_node_names(self) -> list[str]:
-        """모든 노드의 name 속성 목록 반환 (키워드 매칭용)"""
+        """모든 노드의 이름 반환 (name 또는 id 속성, 키워드 매칭용)"""
         with self.driver.session(database=self._database) as session:
-            result = session.run("MATCH (n) WHERE n.name IS NOT NULL RETURN n.name AS name")
+            result = session.run(
+                "MATCH (n) "
+                "WHERE n.name IS NOT NULL OR n.id IS NOT NULL "
+                "RETURN COALESCE(n.name, n.id) AS name"
+            )
             return [record["name"] for record in result]
 
     def get_node_names_by_label(self, label: str) -> list[str]:
         """특정 라벨의 노드명 반환"""
         with self.driver.session(database=self._database) as session:
             result = session.run(
-                f"MATCH (n:{label}) WHERE n.name IS NOT NULL RETURN n.name AS name"
+                f"MATCH (n:{label}) "
+                "WHERE n.name IS NOT NULL OR n.id IS NOT NULL "
+                "RETURN COALESCE(n.name, n.id) AS name"
             )
             return [record["name"] for record in result]
 
@@ -118,21 +124,23 @@ class Neo4jHealthKG:
     def get_condition_info(self, condition_name: str) -> dict:
         """
         질환명으로 증상, 치료법, 주의사항 등 종합 정보를 가져온다.
+        name 또는 id 속성 모두 매칭한다.
         """
         query = """
-        MATCH (c:Condition {name: $name})
+        MATCH (c:Condition)
+        WHERE c.name = $name OR c.id = $name
         OPTIONAL MATCH (s)-[:SYMPTOM_OF]->(c)
         OPTIONAL MATCH (c)-[:MANAGED_BY]->(t)
         OPTIONAL MATCH (c)-[:AFFECTS]->(bp:BodyPart)
         OPTIONAL MATCH (rf)-[:CAUSES]->(c)
         OPTIONAL MATCH (prev)-[:PREVENTS]->(c)
-        RETURN c.name AS condition,
+        RETURN COALESCE(c.name, c.id) AS condition,
                c.description AS description,
-               collect(DISTINCT {name: s.name, desc: s.description}) AS symptoms,
-               collect(DISTINCT {name: t.name, desc: t.description}) AS treatments,
-               collect(DISTINCT bp.name) AS body_parts,
-               collect(DISTINCT {name: rf.name, desc: rf.description}) AS risk_factors,
-               collect(DISTINCT {name: prev.name, desc: prev.description}) AS prevention
+               collect(DISTINCT {name: COALESCE(s.name, s.id), desc: s.description}) AS symptoms,
+               collect(DISTINCT {name: COALESCE(t.name, t.id), desc: t.description}) AS treatments,
+               collect(DISTINCT COALESCE(bp.name, bp.id)) AS body_parts,
+               collect(DISTINCT {name: COALESCE(rf.name, rf.id), desc: rf.description}) AS risk_factors,
+               collect(DISTINCT {name: COALESCE(prev.name, prev.id), desc: prev.description}) AS prevention
         """
         with self.driver.session(database=self._database) as session:
             result = session.run(query, name=condition_name).single()
@@ -154,8 +162,9 @@ class Neo4jHealthKG:
         """증상으로부터 가능한 질환 목록을 반환한다."""
         query = """
         MATCH (s:Symptom)-[:SYMPTOM_OF]->(c:Condition)
-        WHERE s.name = $symptom OR s.name CONTAINS $symptom
-        RETURN DISTINCT c.name AS condition
+        WHERE s.name = $symptom OR s.id = $symptom
+           OR s.name CONTAINS $symptom OR s.id CONTAINS $symptom
+        RETURN DISTINCT COALESCE(c.name, c.id) AS condition
         """
         with self.driver.session(database=self._database) as session:
             result = session.run(query, symptom=symptom)
@@ -168,11 +177,12 @@ class Neo4jHealthKG:
         query = """
         MATCH (start)
         WHERE start.name CONTAINS $keyword
+           OR start.id CONTAINS $keyword
            OR (start.description IS NOT NULL AND start.description CONTAINS $keyword)
         WITH start LIMIT 5
         MATCH path = (start)-[*1..%d]-(related)
         WHERE related <> start
-        RETURN DISTINCT related.name AS name,
+        RETURN DISTINCT COALESCE(related.name, related.id) AS name,
                labels(related)[0] AS type,
                related.description AS desc,
                length(path) AS distance
@@ -208,8 +218,12 @@ class Neo4jHealthKG:
     def merge_relationship(self, src: str, dst: str, rel_type: str):
         """관계를 MERGE (중복 방지)"""
         query = f"""
-        MATCH (a {{name: $src}})
-        MATCH (b {{name: $dst}})
+        MATCH (a)
+        WHERE a.name = $src OR a.id = $src
+        WITH a LIMIT 1
+        MATCH (b)
+        WHERE b.name = $dst OR b.id = $dst
+        WITH a, b LIMIT 1
         MERGE (a)-[:{rel_type}]->(b)
         """
         with self.driver.session(database=self._database) as session:

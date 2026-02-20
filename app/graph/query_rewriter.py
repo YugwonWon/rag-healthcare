@@ -93,8 +93,12 @@ def rewrite_query(
         logger.info(f"쿼리 재작성 (대명사): '{msg}' → '{rewritten}'")
         return rewritten
 
-    # 패턴 6: 매우 짧은 질문 (10자 이하)
-    if len(msg) <= 10:
+    # 패턴 6: 매우 짧은 질문 (10자 이하) — 인사/일반 대화는 제외
+    _GREETING_RE = re.compile(
+        r"^(안녕|반갑|감사|고마|잘 지내|오래간만|오랜만|"
+        r"좋은 아침|좋은 하루|잘 자|잘 잤|심심|외로|뭐 해|뭐해)"
+    )
+    if len(msg) <= 10 and not _GREETING_RE.search(msg):
         rewritten = f"{last_user_msg} {msg}"
         logger.info(f"쿼리 재작성 (짧은 질문): '{msg}' → '{rewritten}'")
         return rewritten
