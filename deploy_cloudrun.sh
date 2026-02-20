@@ -11,14 +11,15 @@ set -e
 
 # .env 파일 로드
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | grep -E '^GCP_|^SERVICE_NAME=|^OLLAMA_MODEL=' | xargs)
+    export $(grep -v '^#' .env | grep -E '^GCP_|^SERVICE_NAME=|^OLLAMA_MODEL=|^NEO4J_' | xargs)
 fi
 
 # 설정
 PROJECT_ID="${GCP_PROJECT_ID:-rag-healthcare-483412}"
 REGION="${GCP_REGION:-asia-northeast3}"
 SERVICE_NAME="${SERVICE_NAME:-healthcare-rag-chatbot}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-k-exaone-counseling}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-kanana-counseling}"
+NEO4J_URI="${NEO4J_URI:-neo4j+s://8f5bfe22.databases.neo4j.io}"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
 
 # 색상 출력
@@ -32,6 +33,7 @@ echo "  프로젝트: ${PROJECT_ID}"
 echo "  리전: ${REGION}"
 echo "  서비스: ${SERVICE_NAME}"
 echo "  모델: ${OLLAMA_MODEL}"
+echo "  Neo4j: ${NEO4J_URI}"
 
 # GGUF 파일 확인 (심링크면 실제 파일로 복사)
 GGUF_FILE="models/${OLLAMA_MODEL}.gguf"
@@ -95,6 +97,10 @@ gcloud run deploy ${SERVICE_NAME} \
     --set-env-vars "OLLAMA_MODEL=${OLLAMA_MODEL}" \
     --set-env-vars "OLLAMA_BASE_URL=http://localhost:11434" \
     --set-env-vars "GRAPHRAG_ENABLED=true" \
+    --set-env-vars "NEO4J_URI=${NEO4J_URI}" \
+    --set-env-vars "NEO4J_USERNAME=neo4j" \
+    --set-env-vars "NEO4J_DATABASE=neo4j" \
+    --set-secrets "NEO4J_PASSWORD=neo4j-password:latest" \
     --set-env-vars "DB_HOST=/cloudsql/${PROJECT_ID}:${REGION}:healthcare-db" \
     --set-env-vars "DB_NAME=healthcare" \
     --set-env-vars "DB_USER=postgres" \
