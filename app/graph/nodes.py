@@ -31,7 +31,7 @@ def _get_health_detector() -> HealthSignalDetector:
 # ============================================================
 
 async def preprocess_node(state: ConversationState) -> dict:
-    """전처리: 건강 분석, 대화 이력 로딩, 시간 설정"""
+    """전처리: 건강 분석, 대화 이력 로딩, 반복 질문·주제 이탈 감지"""
     nickname = state["nickname"]
     message = state["message"]
 
@@ -61,14 +61,23 @@ async def preprocess_node(state: ConversationState) -> dict:
     # 대화 이력 로딩 (시간순, 최근 N개)
     conversation_history = await _load_conversation_history(nickname)
 
-    # 직전 대화에서 주제 추출
+    # 직전 대화에서 주제 추출 + 이전 주제 목록
     recent_topic = ""
+    previous_topics: list[str] = []
     turn_count = len([h for h in conversation_history if h.get("role") == "user"])
-    if conversation_history:
-        for entry in reversed(conversation_history):
-            if entry.get("role") == "user":
-                recent_topic = extract_topic(entry["content"])
-                break
+    for entry in reversed(conversation_history):
+        if entry.get("role") == "user":
+            topic = extract_topic(entry["content"])
+            if not recent_topic:
+                recent_topic = topic
+            if topic and topic not in previous_topics:
+                previous_topics.append(topic)
+
+    # ── 반복 질문 감지 ──
+    repeated_question = _detect_repeated_question(message, conversation_history)
+
+    # ── 주제 이탈 감지 ──
+    topic_drifted = _detect_topic_drift(message, recent_topic, conversation_history)
 
     return {
         "current_time": current_time,
@@ -80,6 +89,9 @@ async def preprocess_node(state: ConversationState) -> dict:
         "conversation_history": conversation_history,
         "recent_topic": recent_topic,
         "turn_count": turn_count,
+        "previous_topics": previous_topics,
+        "repeated_question": repeated_question,
+        "topic_drifted": topic_drifted,
     }
 
 
@@ -164,10 +176,10 @@ def retrieve_node(state: ConversationState) -> dict:
         if d.get("metadata", {}).get("category") != "conversations"
     ]
 
-    # GraphRAG 지식그래프 검색
+    # GraphRAG 지식그래프 검색 (Neo4j)
     graph_context = ""
     try:
-        from app.knowledge_graph.graph_rag import get_graph_rag
+        from app.knowledge_graph import get_graph_rag
         graph_rag = get_graph_rag()
         graph_context = graph_rag.search(query)
     except Exception as e:
@@ -213,7 +225,16 @@ def emergency_node(state: ConversationState) -> dict:
 # ============================================================
 
 async def generate_response_node(state: ConversationState) -> dict:
-    """시스템 프롬프트 구성 + LLM 호출"""
+    """시스템 프롬프트 구성 + LLM 호출
+
+    6가지 프롬프팅 규칙:
+    1. 공감·위로 먼저
+    2. 원인 설명 + 일상 대처법
+    3. 유도 질문
+    4. 3턴 이상 + 심각 증상 → 의료 권유
+    5. 대화 마무리 금지 + 이해 확인
+    6. 반복 질문 대응 + 주제 이탈 복귀
+    """
     intent = state.get("intent", Intent.GENERAL_CHAT)
     message = state["message"]
     nickname = state["nickname"]
@@ -242,26 +263,47 @@ async def generate_response_node(state: ConversationState) -> dict:
         retrieved_context=retrieved_context,
     )
 
-    # 의도별 추가 지시
+    # ── 의도별 추가 지시 ──
     if intent == Intent.EMERGENCY:
-        system_prompt += (
-            "\n\n[⚠️ 응급 상황 감지]\n"
-            "사용자에게 즉시 119에 전화하거나 보호자에게 연락하도록 안내하세요.\n"
-            "침착하게 현재 상태를 확인하고, 안전한 자세를 유지하도록 안내합니다."
-        )
+        system_prompt += prompts.EMERGENCY_ADDENDUM
     elif intent == Intent.FOLLOWUP:
         rewritten = state.get("rewritten_query", message)
-        system_prompt += f"\n\n[맥락 참고] 사용자의 질문은 이전 대화의 후속입니다. 재작성된 질문: {rewritten}"
+        system_prompt += prompts.FOLLOWUP_ADDENDUM.format(rewritten_query=rewritten)
     elif intent == Intent.MEDICATION:
-        system_prompt += "\n\n[복약 관련] 약에 대한 정보를 정확하게 안내하되, 반드시 의사나 약사와 상담하도록 권유하세요."
+        system_prompt += prompts.MEDICATION_ADDENDUM
 
-    # 건강 위험 감지 시 추가
+    # ── 규칙 4: 3턴 이상 + 건강 상담 → 의료 권유 ──
+    turn_count = state.get("turn_count", 0)
     risk_level = state.get("risk_level", "low")
+    medical_referral_given = state.get("medical_referral_given", False)
+
+    if (
+        turn_count >= 3
+        and not medical_referral_given
+        and intent in (Intent.HEALTH_CONSULT, Intent.MEDICATION, Intent.FOLLOWUP)
+        and risk_level in ("medium", "high", "critical")
+    ):
+        system_prompt += prompts.MEDICAL_REFERRAL_ADDENDUM.format(turn_count=turn_count)
+        medical_referral_given = True
+
+    # ── 규칙 6: 반복 질문 감지 ──
+    if state.get("repeated_question", False):
+        system_prompt += prompts.REPEATED_QUESTION_ADDENDUM
+
+    # ── 규칙 6: 주제 이탈 감지 ──
+    if state.get("topic_drifted", False):
+        previous_topics = state.get("previous_topics", [])
+        prev_topic = previous_topics[-1] if previous_topics else "이전 주제"
+        system_prompt += prompts.TOPIC_DRIFT_ADDENDUM.format(previous_topic=prev_topic)
+
+    # ── 건강 위험 감지 시 추가 ──
     if risk_level in ("high", "critical"):
         health_analysis = state.get("health_analysis", {})
         terms = health_analysis.get("detected_health_terms", [])
-        system_prompt += f"\n\n[건강 위험 감지] 위험 수준: {risk_level}, 감지 용어: {', '.join(terms[:5])}"
-        system_prompt += "\n주의: 필요시 보호자 연락이나 전문가 상담을 안내하세요."
+        system_prompt += prompts.HIGH_RISK_ADDENDUM.format(
+            risk_level=risk_level,
+            risk_terms=", ".join(terms[:5]),
+        )
 
     # LLM 호출
     llm = get_llm()
@@ -273,11 +315,12 @@ async def generate_response_node(state: ConversationState) -> dict:
     ]
 
     response = await llm.chat(messages)
-    logger.info(f"💬 응답 생성 완료 | intent={intent.value} | len={len(response)}")
+    logger.info(f"💬 응답 생성 완료 | intent={intent.value} | turn={turn_count} | len={len(response)}")
 
     return {
         "response": response,
         "system_prompt": system_prompt,
+        "medical_referral_given": medical_referral_given,
     }
 
 
@@ -344,3 +387,107 @@ def _format_docs(docs: list[str]) -> str:
     for i, doc in enumerate(docs[:3], 1):
         parts.append(f"[{i}] {doc}")
     return "\n\n".join(parts)
+
+
+# ============================================================
+# 반복 질문 감지 & 주제 이탈 감지
+# ============================================================
+
+def _detect_repeated_question(message: str, history: list[dict]) -> bool:
+    """사용자가 이전에 했던 질문과 유사한 질문을 하고 있는지 감지한다.
+
+    키워드 겹침 비율로 판단 (LLM 호출 없이).
+    """
+    if not history:
+        return False
+
+    msg_keywords = _extract_content_keywords(message)
+    if not msg_keywords:
+        return False
+
+    # 과거 사용자 메시지와 비교
+    for entry in history:
+        if entry.get("role") != "user":
+            continue
+        prev_keywords = _extract_content_keywords(entry.get("content", ""))
+        if not prev_keywords:
+            continue
+        # Overlap Coefficient: 짧은 집합 대비 겹침 비율
+        intersection = msg_keywords & prev_keywords
+        min_size = min(len(msg_keywords), len(prev_keywords))
+        if min_size and len(intersection) / min_size >= 0.5:
+            logger.info(f"🔄 반복 질문 감지 | 겹침: {intersection}")
+            return True
+
+    return False
+
+
+def _detect_topic_drift(
+    message: str, recent_topic: str, history: list[dict]
+) -> bool:
+    """현재 메시지가 최근 건강 상담 주제에서 벗어났는지 감지한다.
+
+    건강 상담 중에만 주제 이탈을 체크한다 (일상 대화는 체크 안 함).
+    """
+    if not recent_topic or not history:
+        return False
+
+    # 최근 대화가 건강 관련이었는지 확인 (최근 사용자 메시지 + AI 응답)
+    recent_was_health = False
+    for entry in reversed(history[-4:]):
+        content = entry.get("content", "")
+        if any(kw in content for kw in _HEALTH_TOPIC_KEYWORDS):
+            recent_was_health = True
+            break
+
+    if not recent_was_health:
+        return False
+
+    # 현재 메시지가 건강 이야기와 관련이 있는지 확인
+    msg_has_health = any(kw in message for kw in _HEALTH_TOPIC_KEYWORDS)
+
+    # 건강 상담 중이었는데 현재 메시지에 건강 키워드가 없고, 메시지가 충분히 긴 경우
+    if not msg_has_health and len(message) > 10:
+        logger.info(f"↩️ 주제 이탈 감지 | recent_topic={recent_topic}")
+        return True
+
+    return False
+
+
+def _extract_content_keywords(text: str) -> set[str]:
+    """텍스트에서 의미 있는 핵심어를 추출한다 (조사/어미 제거 → 어근 비교)."""
+    import re
+    words = re.findall(r"[가-힣]{2,}", text)
+    # 일반적인 접속사·불용어
+    stopwords = {
+        "그래서", "그러면", "그런데", "하지만", "그리고", "때문에",
+        "여기서", "거기서", "이것은", "그것은", "저것은", "어떻게",
+        "알겠어", "네네네", "그래요",
+    }
+    # 한국어 조사/어미 패턴 제거 → 어근 추출
+    _SUFFIX_RE = re.compile(
+        r"(이요|에요|아요|어요|해요|하고|인데|은데|는데|아서|어서|해서|"
+        r"이가|에서|으로|에게|까지|부터|조차|마저|이나|이랑|하면|으면|"
+        r"니다|습니|세요|시다|네요|지요|거든|는지|런지|ㄴ데|ㄹ까|아도|어도|"
+        r"이|을|를|은|는|에|의|과|와|도|만|로|가|요|서|고|게|며|지|니|다|자|면|죠|네|데|래|든)$"
+    )
+    stems = set()
+    for w in words:
+        if w in stopwords:
+            continue
+        stem = _SUFFIX_RE.sub("", w)
+        if len(stem) >= 1:
+            stems.add(stem)
+        else:
+            stems.add(w)  # 어근이 너무 짧으면 원본 유지
+    return stems
+
+
+# 건강 관련 주제 판별 키워드
+_HEALTH_TOPIC_KEYWORDS = {
+    "아프", "아파", "통증", "증상", "병원", "약", "수술", "검사",
+    "진료", "치료", "건강", "질환", "질병", "피부", "혈압", "혈당",
+    "당뇨", "수면", "잠", "기침", "두통", "어지러", "무릎", "허리",
+    "관절", "소화", "변비", "설사", "요실금", "탈모", "갱년기",
+    "난청", "골다공증", "호흡", "심장", "발톱", "손톱", "눈", "귀",
+}
