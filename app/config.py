@@ -24,12 +24,12 @@ class Settings(BaseSettings):
     # LLM 설정 (Ollama)
     # ============================================================
     # 지원 모델 목록:
-    # - exaone-counseling: LGAI-EXAONE/EXAONE-4.0-1.2B (현재 사용)
+    # - exaone-counseling: LGAI-EXAONE/EXAONE-4.0-1.2B (이전 모델)
     #   └ 특징: 1.28B 경량, 온디바이스 최적화, 한국어 지원
     #   └ GGUF: models/EXAONE-4.0-1.2B-Q4_K_M.gguf
     #   └ CPU 추론 속도 우수 (1.2B 경량)
     #
-    # - kanana-counseling: Kakao Kanana-nano 2.1B Instruct (이전 모델)
+    # - kanana-counseling: Kakao Kanana-nano 2.1B Instruct (현재 모델)
     #   └ HuggingFace: kakaocorp/kanana-nano-2.1b-instruct
     #   └ GGUF: kanana-nano-2.1b-instruct-q4_k_m.gguf
     #
@@ -37,13 +37,13 @@ class Settings(BaseSettings):
     #   └ Ollama 공식 모델
     # ============================================================
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "exaone-counseling"  # EXAONE 4.0 1.2B 파인튜닝된 상담 모델
+    OLLAMA_MODEL: str = "kanana-counseling"  # Kanana 2.1B 파인튜닝된 상담 모델
     LLM_TEMPERATURE: float = 0.1  # EXAONE 비추론 모드: 한국어 code-switching 방지에 0.1 권장
     LLM_MAX_TOKENS: int = 256  # 짧은 응답을 위해 1024 -> 256
     
     # OpenAI 설정 (Fallback용)
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-3.5-turbo"
+    OPENAI_MODEL: str = "gpt-4o-mini"
     
     # 임베딩 설정 (온디바이스)
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
