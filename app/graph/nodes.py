@@ -5,7 +5,7 @@ LangGraph 노드 함수들
 
 from app.graph import ConversationState, Intent
 from app.graph.intent_classifier import classify_intent
-from app.graph.query_rewriter import rewrite_query, extract_topic
+from app.graph.query_rewriter import extract_topic
 from app.config import settings, prompts
 from app.model import get_llm
 from app.langchain_store import get_langchain_store
@@ -96,9 +96,9 @@ async def preprocess_node(state: ConversationState) -> dict:
 
 
 async def _load_conversation_history(nickname: str) -> list[dict]:
-    """대화 이력을 시간순으로 로딩한다."""
+    """대화 이력을 시간순으로 로딩한다 (최근 3턴 = 6메시지)."""
     store = get_langchain_store()
-    return store.get_recent_conversations(nickname, limit=5)
+    return store.get_recent_conversations(nickname, limit=3)
 
 
 # ============================================================
@@ -131,32 +131,13 @@ def classify_intent_node(state: ConversationState) -> dict:
 
 
 # ============================================================
-# 노드 3: 쿼리 재작성 (FOLLOWUP 의도에서만 실행)
-# ============================================================
-
-def rewrite_query_node(state: ConversationState) -> dict:
-    """후속 질문일 때 이전 맥락을 반영해 쿼리를 재작성한다."""
-    intent = state.get("intent")
-    message = state["message"]
-    history = state.get("conversation_history", [])
-    recent_topic = state.get("recent_topic", "")
-
-    if intent == Intent.FOLLOWUP:
-        rewritten = rewrite_query(message, history, recent_topic)
-        logger.info(f"✏️ 쿼리 재작성: '{message}' → '{rewritten}'")
-        return {"rewritten_query": rewritten}
-
-    return {"rewritten_query": message}
-
-
-# ============================================================
-# 노드 4: 문서 검색 (RAG + GraphRAG)
+# 노드 3: 문서 검색 (RAG + GraphRAG)
 # ============================================================
 
 def retrieve_node(state: ConversationState) -> dict:
-    """벡터 검색 + 지식그래프 검색"""
-    # 재작성된 쿼리 또는 확장 쿼리 사용
-    query = state.get("rewritten_query") or state.get("enhanced_query") or state["message"]
+    """벡터 검색 + 지식그래프 검색 (원본 메시지 + 건강 키워드로 검색)"""
+    # 건강 키워드 확장 쿼리 또는 원본 메시지 사용 (쿼리 재작성 없음)
+    query = state.get("enhanced_query") or state["message"]
     intent = state.get("intent", Intent.GENERAL_CHAT)
 
     # 일반 대화면 문서 검색 생략
@@ -267,8 +248,7 @@ async def generate_response_node(state: ConversationState) -> dict:
     if intent == Intent.EMERGENCY:
         system_prompt += prompts.EMERGENCY_ADDENDUM
     elif intent == Intent.FOLLOWUP:
-        rewritten = state.get("rewritten_query", message)
-        system_prompt += prompts.FOLLOWUP_ADDENDUM.format(rewritten_query=rewritten)
+        system_prompt += prompts.FOLLOWUP_ADDENDUM
     elif intent == Intent.MEDICATION:
         system_prompt += prompts.MEDICATION_ADDENDUM
 
@@ -305,13 +285,12 @@ async def generate_response_node(state: ConversationState) -> dict:
             risk_terms=", ".join(terms[:5]),
         )
 
-    # LLM 호출
+    # LLM 호출 — 원본 메시지를 그대로 전달 (맥락 판단은 LLM이 히스토리로 수행)
     llm = get_llm()
-    user_msg = state.get("rewritten_query", message) if intent == Intent.FOLLOWUP else message
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_msg},
+        {"role": "user", "content": message},
     ]
 
     response = await llm.chat(messages)

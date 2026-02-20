@@ -5,11 +5,14 @@ LangGraph 대화 그래프 정의
 흐름:
   START → preprocess → classify_intent → [분기]
     → GENERAL_CHAT     → generate_response → save → END
-    → HEALTH_CONSULT   → rewrite_query → retrieve → generate_response → save → END
-    → FOLLOWUP         → rewrite_query → retrieve → generate_response → save → END
+    → HEALTH_CONSULT   → retrieve → generate_response → save → END
+    → FOLLOWUP         → retrieve → generate_response → save → END
     → EMERGENCY        → emergency_alert → retrieve → generate_response → save → END
-    → MEDICATION       → rewrite_query → retrieve → generate_response → save → END
-    → LIFESTYLE        → rewrite_query → retrieve → generate_response → save → END
+    → MEDICATION       → retrieve → generate_response → save → END
+    → LIFESTYLE        → retrieve → generate_response → save → END
+
+쿼리 재작성 없이 원본 메시지로 검색하고,
+대화 히스토리는 LLM 프롬프트에 직접 주입하여 맥락을 판단한다.
 """
 
 from langgraph.graph import StateGraph, END
@@ -18,7 +21,6 @@ from app.graph import ConversationState, Intent
 from app.graph.nodes import (
     preprocess_node,
     classify_intent_node,
-    rewrite_query_node,
     retrieve_node,
     emergency_node,
     generate_response_node,
@@ -51,7 +53,6 @@ def build_conversation_graph() -> StateGraph:
     # ── 노드 등록 ──
     graph.add_node("preprocess", preprocess_node)
     graph.add_node("classify_intent", classify_intent_node)
-    graph.add_node("rewrite_query", rewrite_query_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("emergency", emergency_node)
     graph.add_node("generate_response", generate_response_node)
@@ -70,15 +71,12 @@ def build_conversation_graph() -> StateGraph:
         {
             "emergency": "emergency",
             "general": "generate_response",
-            "needs_retrieval": "rewrite_query",
+            "needs_retrieval": "retrieve",
         },
     )
 
     # emergency → retrieve → generate_response
     graph.add_edge("emergency", "retrieve")
-
-    # rewrite_query → retrieve → generate_response
-    graph.add_edge("rewrite_query", "retrieve")
     graph.add_edge("retrieve", "generate_response")
 
     # generate_response → save_conversation → END

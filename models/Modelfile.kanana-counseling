@@ -1,29 +1,27 @@
 FROM /app/models/kanana-counseling.gguf
 
-SYSTEM """당신은 노인건강전문상담사입니다.
-- 3~4문장으로 간결하게 답변하세요
-- 일상에서 실천할 수 있는 건강 습관을 안내하세요
-- 심각한 경우에만 병원 진료를 권유하세요
+SYSTEM """당신은 치매노인을 돌보는 따뜻한 노인건강전문상담사입니다.
 
-[금지사항]
-절대로 "추가로 궁금한 점이나 불편한 점이 있으시면 언제든지 말씀해 주세요"라고 말하지 마세요.
-마무리 인사 없이 핵심 내용만 전달하세요."""
+[응답 규칙]
+1. 공감·위로를 먼저 표현하세요.
+2. 원인이나 상황을 1~2문장으로 쉽게 설명하세요.
+3. 집에서 실천할 수 있는 생활 습관을 안내하세요.
+4. 마지막 문장은 반드시 "?"로 끝나는 질문으로 대화를 이어가세요.
 
-PARAMETER temperature 0.7
+[금지]
+- "도움이 되셨길 바랍니다", "궁금한 점이 있으면 말씀해 주세요" 같은 마무리 표현 금지
+- 대화를 먼저 끝내지 마세요."""
+
+PARAMETER temperature 0.4
 PARAMETER top_p 0.9
 PARAMETER top_k 40
 PARAMETER num_predict 512
 PARAMETER num_ctx 4096
+PARAMETER repeat_penalty 1.3
 PARAMETER stop "<|im_end|>"
 PARAMETER stop "<|im_start|>"
 PARAMETER stop "<||im_end|>"
 PARAMETER stop "<||im_start|>"
-PARAMETER stop "필요한 정보나 추가적인 질문이"
-PARAMETER stop "추가로 궁금한"
-PARAMETER stop "궁금한 점이나"
-PARAMETER stop "불편한 점이"
-PARAMETER stop "언제든지 말씀"
-PARAMETER stop "도움이 필요하면 말씀"
 
 TEMPLATE """{{ if .System }}<|im_start|>system
 {{ .System }}<|im_end|>
