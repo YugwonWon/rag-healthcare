@@ -109,7 +109,12 @@ def classify_intent(
         logger.warning(f"🚨 응급 키워드 감지: {emergency_hits}")
         return Intent.EMERGENCY, 0.95
 
-    # ── 2단계: 후속 질문 판별 ──
+    # ── 2단계: 일반 대화 체크 (인사/감정 — followup보다 우선) ──
+    for pattern in GENERAL_CHAT_PATTERNS:
+        if re.search(pattern, msg):
+            return Intent.GENERAL_CHAT, 0.8
+
+    # ── 3단계: 후속 질문 판별 ──
     # 짧은 메시지(15자 이하) + 이전 대화가 있으면 후속 질문 가능성 높음
     if turn_count > 0 and recent_topic:
         for pattern in FOLLOWUP_PATTERNS:
@@ -121,29 +126,24 @@ def classify_intent(
         if len(msg) <= 10:
             return Intent.FOLLOWUP, 0.75
 
-    # ── 3단계: 건강 상담 체크 ──
+    # ── 4단계: 건강 상담 체크 ──
     health_hits = [kw for kw in HEALTH_KEYWORDS if kw in msg_lower]
     if len(health_hits) >= 2:
         return Intent.HEALTH_CONSULT, 0.9
     if len(health_hits) == 1:
         return Intent.HEALTH_CONSULT, 0.75
 
-    # ── 4단계: 복약 체크 ──
+    # ── 5단계: 복약 체크 ──
     med_hits = [kw for kw in MEDICATION_KEYWORDS if kw in msg_lower]
     if med_hits:
         return Intent.MEDICATION, 0.8
 
-    # ── 5단계: 생활습관 체크 ──
+    # ── 6단계: 생활습관 체크 ──
     life_hits = [kw for kw in LIFESTYLE_KEYWORDS if kw in msg_lower]
     if len(life_hits) >= 2:
         return Intent.LIFESTYLE, 0.8
     if len(life_hits) == 1:
         return Intent.LIFESTYLE, 0.65
-
-    # ── 6단계: 일반 대화 체크 ──
-    for pattern in GENERAL_CHAT_PATTERNS:
-        if re.search(pattern, msg):
-            return Intent.GENERAL_CHAT, 0.8
 
     # ── 기본값: 메시지 길이 기반 추정 ──
     if len(msg) <= 10 and turn_count > 0:
