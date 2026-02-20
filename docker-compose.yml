@@ -1,0 +1,33 @@
+# 치매노인 헬스케어 RAG 챗봇 - 로컬 개발 환경
+# Neo4j + Ollama + App 구성
+#
+# 사용법:
+#   docker compose up -d neo4j     # Neo4j만 먼저 기동
+#   docker compose up -d           # 전체 기동
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: healthcare-neo4j
+    ports:
+      - "7474:7474"   # Neo4j 브라우저 (http://localhost:7474)
+      - "7687:7687"   # Bolt 프로토콜
+    environment:
+      NEO4J_AUTH: neo4j/healthcare_rag_2024
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+      NEO4J_apoc_import_file_use__neo4j__config: "true"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "neo4j", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  neo4j_data:
+  neo4j_logs:

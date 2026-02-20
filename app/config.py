@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     GRAPHRAG_ENABLED: bool = True  # GraphRAG 지식그래프 사용 여부
     GRAPHRAG_MAX_DEPTH: int = 2    # 지식그래프 탐색 깊이
     
+    # Neo4j 설정
+    NEO4J_URI: Optional[str] = None
+    NEO4J_USERNAME: str = "neo4j"
+    NEO4J_PASSWORD: Optional[str] = None
+    NEO4J_DATABASE: str = "neo4j"
+    
     # LangGraph 설정
     LANGGRAPH_FOLLOWUP_MIN_CONFIDENCE: float = 0.5  # 후속 질문 분류 최소 신뢰도
     
