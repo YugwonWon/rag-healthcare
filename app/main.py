@@ -452,7 +452,7 @@ async def delete_conversation_history(nickname: str):
     """
     try:
         store = get_store()
-        deleted_count = await store.delete_conversations(nickname)
+        deleted_count = store.clear_conversation_history(nickname)
         logger.info(f"대화 기록 삭제 | nickname={nickname} | count={deleted_count}")
         return {
             "success": True,
