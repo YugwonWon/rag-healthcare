@@ -1,10 +1,12 @@
 """
 건강 위험 신호 감지 모듈
-논문 방법론에 따른 NER + N-gram + 의미적 유사도 기반 건강 위험 감지
+바른 형태소 분석기 기반 의료 개체 인식 + N-gram + 규칙 기반 건강 위험 감지
 
-"A rule-based approach establishes foundational guidelines for risk detection,
-supplemented by an LLM [...] Health-related terms are first tagged using NER,
-and N-grams [...] are combined with semantic similarity analysis."
+방법론:
+1. bareunpy 형태소 분석 → 어근 복원 + 불용어 제거
+2. 의료 용어 사전 매칭 (어근 기준, 카테고리 분류)
+3. 복합 패턴 감지 + N-gram 컨텍스트 추출
+4. 규칙 기반 위험 수준 판정
 """
 
 import re
@@ -12,7 +14,10 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .korean_ner import KoreanNERProcessor, NERResult, get_ner_processor
+from .medical_entity import (
+    BareunMorphAnalyzer, MorphAnalysisResult, MedicalEntity,
+    MedicalCategory, get_morph_analyzer,
+)
 from .ngram_extractor import NGramExtractor, NGramResult
 from app.logger import get_logger
 
@@ -56,7 +61,7 @@ class HealthRiskSignal:
 class HealthAnalysisResult:
     """건강 분석 결과"""
     original_text: str
-    ner_result: Optional[NERResult] = None
+    morph_result: Optional[MorphAnalysisResult] = None
     ngram_result: Optional[NGramResult] = None
     risk_signals: List[HealthRiskSignal] = field(default_factory=list)
     overall_risk_level: RiskLevel = RiskLevel.LOW
@@ -67,10 +72,10 @@ class HealthAnalysisResult:
 class HealthSignalDetector:
     """건강 위험 신호 감지기
     
-    논문 방법론을 구현:
-    1. NER로 건강 관련 용어 태깅
-    2. 태깅된 용어 전후 5단어 N-gram 추출
-    3. 규칙 기반 + 의미적 유사도로 위험 신호 감지
+    bareunpy 형태소 분석 기반 의료 개체 인식 + 규칙 기반 위험 감지:
+    1. 형태소 분석으로 어근 복원 후 의료 용어 사전 매칭
+    2. 매칭된 용어 전후 5단어 N-gram 컨텍스트 추출
+    3. 규칙 기반 위험 신호 감지 + 컨텍스트 패턴으로 수준 조정
     """
     
     # 카테고리별 키워드 (논문의 health signal keywords 기반)
@@ -164,21 +169,20 @@ class HealthSignalDetector:
     
     def __init__(
         self,
-        ner_processor: Optional[KoreanNERProcessor] = None,
+        morph_analyzer: Optional[BareunMorphAnalyzer] = None,
         ngram_extractor: Optional[NGramExtractor] = None,
-        use_ner_model: bool = True,
-        embedding_model = None  # 의미적 유사도용 임베딩 모델
+        use_ner_model: bool = True,  # 하위 호환 (무시됨)
+        embedding_model = None,
     ):
         """
         Args:
-            ner_processor: NER 프로세서 (None이면 기본값 사용)
+            morph_analyzer: 바른 형태소 분석기 (None이면 싱글톤 사용)
             ngram_extractor: N-gram 추출기 (None이면 기본값 사용)
-            use_ner_model: NER 모델 사용 여부
+            use_ner_model: 하위 호환용 (무시됨, 기존 NER은 제거)
             embedding_model: 의미적 유사도 분석용 임베딩 모델
         """
-        self.ner_processor = ner_processor or get_ner_processor()
+        self.morph_analyzer = morph_analyzer or get_morph_analyzer()
         self.ngram_extractor = ngram_extractor or NGramExtractor()
-        self.use_ner_model = use_ner_model
         self.embedding_model = embedding_model
         
     def _detect_risk_by_keywords(
@@ -357,13 +361,13 @@ class HealthSignalDetector:
         """
         result = HealthAnalysisResult(original_text=text)
         
-        # 1. NER로 건강 관련 용어 추출
-        ner_result = self.ner_processor.process(text, use_model=self.use_ner_model)
-        result.ner_result = ner_result
+        # 1. 형태소 분석 + 의료 개체 인식 (bareunpy 기반)
+        morph_result = self.morph_analyzer.analyze(text)
+        result.morph_result = morph_result
         
         # 건강 용어 리스트 (중복 제거)
-        health_terms = list(set(e.text for e in ner_result.health_entities))
-        health_term_positions = [(e.text, e.start, e.end) for e in ner_result.health_entities]
+        health_terms = list(set(e.lemma for e in morph_result.medical_entities))
+        health_term_positions = [(e.text, e.start, e.end) for e in morph_result.medical_entities]
         
         # 2. N-gram 컨텍스트 추출
         if health_term_positions:
@@ -397,7 +401,7 @@ class HealthSignalDetector:
         
         return {
             "overall_risk": result.overall_risk_level.value,
-            "detected_health_terms": [e.text for e in result.ner_result.health_entities][:10],
+            "detected_health_terms": [e.lemma for e in result.morph_result.medical_entities][:10] if result.morph_result else [],
             "risk_categories": [
                 {
                     "category": s.category.value,
@@ -412,13 +416,13 @@ class HealthSignalDetector:
 
 
 # 간편 함수
-def detect_health_signals(text: str, use_ner_model: bool = True) -> HealthAnalysisResult:
+def detect_health_signals(text: str, **kwargs) -> HealthAnalysisResult:
     """건강 위험 신호 감지 (간편 인터페이스)"""
-    detector = HealthSignalDetector(use_ner_model=use_ner_model)
+    detector = HealthSignalDetector()
     return detector.analyze(text)
 
 
-def preprocess_for_rag(text: str, use_ner_model: bool = True) -> str:
+def preprocess_for_rag(text: str, **kwargs) -> str:
     """RAG 검색을 위한 전처리 (향상된 쿼리 반환)"""
-    result = detect_health_signals(text, use_ner_model=use_ner_model)
+    result = detect_health_signals(text)
     return result.enhanced_query
