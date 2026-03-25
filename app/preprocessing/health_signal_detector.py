@@ -102,7 +102,7 @@ class HealthSignalDetector:
             "recommendation": "이동 시 주의하시고, 필요시 보조 기구 사용을 고려하세요."
         },
         RiskCategory.NUTRITIONAL: {
-            "keywords": ["식욕", "입맛", "먹다", "밥", "식사", "체중", "살", "영양",
+            "keywords": ["식욕", "입맛", "밥", "식사", "체중", "살", "영양",
                         "구토", "소화", "체하다", "탈수", "변비", "설사"],
             "level": RiskLevel.MEDIUM,
             "description": "영양 및 식이 관련 문제가 감지되었습니다.",
