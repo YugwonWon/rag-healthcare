@@ -272,6 +272,8 @@ MEDICAL_VERB_DICT: Dict[str, Tuple[MedicalCategory, str]] = {
     "넘어지": (MedicalCategory.CONDITION, "낙상"),
     "미끄러지": (MedicalCategory.CONDITION, "낙상"),
     "쓰러지": (MedicalCategory.CONDITION, "낙상"),
+    "떨어지": (MedicalCategory.CONDITION, "낙상"),
+    "빠지": (MedicalCategory.CONDITION, "낙상"),
     "부러지": (MedicalCategory.CONDITION, "골절"),
     "비틀거리": (MedicalCategory.CONDITION, "균형 장애"),
     "다치": (MedicalCategory.CONDITION, "부상"),
@@ -293,7 +295,6 @@ MEDICAL_VERB_DICT: Dict[str, Tuple[MedicalCategory, str]] = {
     "화나": (MedicalCategory.EMOTION, "분노"),
 
     # ── 영양 ──
-    "먹": (MedicalCategory.NUTRITION, "식사"),
     "삼키": (MedicalCategory.NUTRITION, "연하"),
 
     # ── 약물 ──
@@ -378,8 +379,8 @@ STOPWORDS = {
 }
 
 # 의료 맥락에서만 의미 있는 동사 (불용어에서 제외)
-# "먹" — NUTRITION 사전에 이미 등록, "자" — SLEEP에서 복합패턴으로 처리
-MEDICAL_CONTEXT_VERBS = {"먹", "자", "삼키", "토하"}
+# "먹" — 단독으로는 FP 유발, 복합패턴으로만 처리 / "자" — SLEEP에서 복합패턴으로 처리
+MEDICAL_CONTEXT_VERBS = {"자", "삼키", "토하"}
 
 
 # ═══════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 # HuggingFace Spaces용 의존성
+# gradio는 README.md의 sdk_version으로 자동 설치됨
 
-gradio==5.9.1
 httpx>=0.27.0
 packaging>=21.0
 deep-translator>=1.11.4
