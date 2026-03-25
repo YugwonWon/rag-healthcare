@@ -23,22 +23,22 @@ if [ ! -d "${SPACES_DIR}" ]; then
 fi
 
 # HuggingFace CLI 확인
-if ! command -v huggingface-cli &> /dev/null; then
-    echo -e "${YELLOW}⚠️ huggingface-cli가 설치되어 있지 않습니다. 설치 중...${NC}"
-    pip install huggingface_hub
+if ! command -v hf &> /dev/null; then
+    echo -e "${YELLOW}⚠️ hf CLI가 설치되어 있지 않습니다. 설치 중...${NC}"
+    pipx install huggingface_hub
 fi
 
 # 로그인 확인
 echo -e "\n${YELLOW}🔐 HuggingFace 로그인 확인 중...${NC}"
-if ! huggingface-cli whoami &> /dev/null; then
+if ! hf auth whoami &> /dev/null; then
     echo "로그인이 필요합니다."
-    huggingface-cli login
+    hf auth login
 fi
 
 # 업로드
 echo -e "\n${YELLOW}📤 Spaces에 업로드 중...${NC}"
 cd "${SPACES_DIR}"
-huggingface-cli upload ${HF_SPACE} . --repo-type space
+hf upload ${HF_SPACE} . --repo-type space
 
 echo -e "\n${GREEN}✅ 배포 완료!${NC}"
 echo -e "🔗 Space URL: https://huggingface.co/spaces/${HF_SPACE}"
