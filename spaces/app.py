@@ -77,7 +77,7 @@ print(f"📦 Gradio 버전: {gr.__version__} (5.x: {IS_GRADIO_5}, HF Spaces: {IS
 # 환경변수에서 백엔드 URL 가져오기
 # HuggingFace Spaces면 Cloud Run URL 사용, 로컬이면 localhost
 if IS_HUGGINGFACE:
-    BACKEND_URL = os.getenv("BACKEND_URL", "https://healthcare-rag-chatbot-894545678354.asia-northeast3.run.app")
+    BACKEND_URL = os.getenv("BACKEND_URL", "https://acronymous-nonobsessive-chong.ngrok-free.dev")
 else:
     BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
@@ -92,7 +92,9 @@ API_TIMEOUT = 180.0
 
 async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = None) -> dict:
     """백엔드 API 호출"""
-    async with httpx.AsyncClient(timeout=API_TIMEOUT) as client:
+    # ngrok 무료 플랜: 브라우저 경고 페이지 우회 헤더
+    headers = {"ngrok-skip-browser-warning": "true"}
+    async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
         url = f"{BACKEND_URL}{endpoint}"
         
         try:

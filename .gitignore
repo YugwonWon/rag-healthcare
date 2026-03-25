@@ -3,6 +3,8 @@ models/*.gguf
 finetuning/output
 finetuning/data
 docs/figures
+docs/paper
+evaluation_results
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -146,6 +148,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.local
 .envrc
 .venv
 env/
