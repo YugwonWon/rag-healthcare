@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: rag-healthcare
+    runtime: python
+    buildCommand: pip install -r render/requirements.txt
+    startCommand: python render/app.py
+    envVars:
+      - key: BACKEND_URL
+        value: https://acronymous-nonobsessive-chong.ngrok-free.dev
+      - key: PYTHON_VERSION
+        value: "3.11"
