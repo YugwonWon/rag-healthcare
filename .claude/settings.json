@@ -1,0 +1,13 @@
+{
+  "env": {
+    "DOCKER_HOST": "unix:///Users/yugwon/.docker/run/docker.sock"
+  },
+  "sandbox": {
+    "network": {
+      "allowUnixSockets": ["/Users/yugwon/.docker/run/docker.sock"]
+    },
+    "filesystem": {
+      "allowRead": ["/Users/yugwon/.docker/"]
+    }
+  }
+}
