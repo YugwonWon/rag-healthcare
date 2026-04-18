@@ -1,0 +1,40 @@
+# 맥미니 로컬 배포용 Dockerfile (arm64)
+# Ollama는 호스트에서 네이티브 실행 (Metal GPU 활용)
+# 이 컨테이너는 FastAPI 앱만 담당
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONIOENCODING=utf-8 \
+    LOG_LEVEL=INFO \
+    LOG_TO_CONSOLE=true \
+    LOG_TO_FILE=true
+
+WORKDIR /app
+
+# 빌드 의존성
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 의존성 (캐시 레이어 분리)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 앱 코드 (데이터는 볼륨으로 마운트)
+COPY app/ ./app/
+
+# 로그 디렉토리
+RUN mkdir -p /app/logs
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=3 \
+    CMD curl -sf http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,71 @@
+# 맥미니 로컬 배포용 docker-compose
+# Ollama는 호스트 네이티브 (Metal GPU), 앱 + ngrok만 컨테이너화
+#
+# 전제 조건:
+#   1. Docker Desktop이 실행 중이어야 함
+#   2. Ollama가 호스트에서 실행 중이어야 함: ollama serve
+#   3. .env.local에 NGROK_AUTHTOKEN=... 추가 필요
+#
+# 명령어:
+#   ./deploy_docker.sh              # 시작
+#   ./deploy_docker.sh --stop       # 종료
+#   ./deploy_docker.sh --status     # 상태 확인
+#   ./deploy_docker.sh --logs       # 로그 보기
+#   docker compose -f docker-compose.mac.yml build --no-cache  # 이미지 재빌드
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.mac
+    container_name: healthcare-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.local
+    environment:
+      # .env.local의 localhost 설정을 Docker용으로 덮어쓰기
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # MPS(Metal GPU)는 Docker 컨테이너에서 사용 불가 → CPU fallback
+      - EMBEDDING_DEVICE=cpu
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # 헬스케어 문서 (읽기 전용)
+      - ./data:/app/data:ro
+      # 로그 (쓰기 가능)
+      - ./logs:/app/logs
+      # HuggingFace 임베딩 모델 캐시 (재다운로드 방지)
+      - huggingface_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 15s
+      start_period: 120s
+      retries: 3
+    depends_on:
+      - ngrok
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: healthcare-ngrok
+    restart: unless-stopped
+    command: >
+      http app:8000
+      --domain=acronymous-nonobsessive-chong.ngrok-free.dev
+      --log=stdout
+    env_file:
+      - .env.local
+    ports:
+      - "4040:4040"    # ngrok 대시보드
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4040/api/tunnels"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  huggingface_cache:
+    name: healthcare-hf-cache
