@@ -313,8 +313,8 @@ class PIIRedactor:
             self._tagger_initialized = True
             try:
                 from bareunpy import Tagger
-                from app.preprocessing.medical_entity import BAREUN_API_KEY, BAREUN_HOST, BAREUN_PORT
-                self._tagger = Tagger(BAREUN_API_KEY, BAREUN_HOST, port=BAREUN_PORT)
+                from app.preprocessing.medical_entity import _get_bareun_api_key, BAREUN_HOST, BAREUN_PORT
+                self._tagger = Tagger(_get_bareun_api_key(), BAREUN_HOST, port=BAREUN_PORT)
                 logger.info("PII Redactor: 바른 형태소 분석기 초기화 완료")
             except Exception as e:
                 logger.warning(f"PII Redactor: 바른 형태소 분석기 사용 불가 → 키워드 폴백 ({e})")

@@ -20,9 +20,15 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 # ── bareunpy 설정 ──
-BAREUN_API_KEY = "REDACTED"
 BAREUN_HOST = "api.bareun.ai"
 BAREUN_PORT = 443
+
+
+def _get_bareun_api_key() -> str:
+    key = settings.BAREUN_API_KEY
+    if not key:
+        raise ValueError("BAREUN_API_KEY 환경변수가 설정되지 않았습니다.")
+    return key
 
 
 class MedicalCategory(str, Enum):
@@ -405,7 +411,7 @@ class BareunMorphAnalyzer:
         if not self._initialized:
             try:
                 from bareunpy import Tagger
-                self._tagger = Tagger(BAREUN_API_KEY, BAREUN_HOST, port=BAREUN_PORT)
+                self._tagger = Tagger(_get_bareun_api_key(), BAREUN_HOST, port=BAREUN_PORT)
                 self._initialized = True
                 logger.info("✅ 바른 형태소 분석기 초기화 완료")
             except Exception as e:
