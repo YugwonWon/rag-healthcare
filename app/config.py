@@ -117,7 +117,13 @@ class Settings(BaseSettings):
     
     # HuggingFace 설정
     HF_TOKEN: Optional[str] = None
-    
+
+    # 관리자 API 키 (문서 추가/삭제 등 관리용 엔드포인트 보호)
+    ADMIN_API_KEY: Optional[str] = None
+
+    # 허용할 프론트엔드 도메인 목록 (쉼표 구분)
+    ALLOWED_ORIGINS: str = "https://acronymous-nonobsessive-chong.ngrok-free.dev"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

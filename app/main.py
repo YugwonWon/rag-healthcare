@@ -8,8 +8,9 @@ from datetime import datetime
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -205,13 +206,21 @@ app = FastAPI(
 )
 
 # CORS 설정
+_allowed_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 프로덕션에서는 특정 도메인만 허용
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 관리자 API 키 인증
+_api_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+
+async def require_admin_key(key: str = Security(_api_key_header)):
+    if not settings.ADMIN_API_KEY or key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="관리자 키가 필요합니다.")
 
 
 # 요청/응답 로깅 미들웨어
@@ -446,7 +455,7 @@ async def get_conversation_history(
 
 
 @app.delete("/history/{nickname}")
-async def delete_conversation_history(nickname: str):
+async def delete_conversation_history(nickname: str, _=Depends(require_admin_key)):
     """
     사용자의 대화 기록 삭제
     """
@@ -466,7 +475,7 @@ async def delete_conversation_history(nickname: str):
 
 
 @app.post("/documents")
-async def add_documents(request: DocumentRequest):
+async def add_documents(request: DocumentRequest, _=Depends(require_admin_key)):
     """
     헬스케어 문서 추가
     """
