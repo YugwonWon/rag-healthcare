@@ -15,6 +15,7 @@ class Intent(str, Enum):
     FOLLOWUP = "followup"                  # 후속 질문 (이전 맥락 의존)
     MEDICATION = "medication"              # 복약 관련
     LIFESTYLE = "lifestyle"               # 생활습관 (식사, 운동, 수면)
+    BLOCKED = "blocked"                    # 프롬프트 유출/인젝션 시도 차단
 
 
 class ConversationState(TypedDict, total=False):

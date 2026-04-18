@@ -4,12 +4,13 @@ LangGraph 대화 그래프 정의
 
 흐름:
   START → preprocess → classify_intent → [분기]
-    → GENERAL_CHAT     → generate_response → save → END
-    → HEALTH_CONSULT   → retrieve → generate_response → save → END
-    → FOLLOWUP         → retrieve → generate_response → save → END
-    → EMERGENCY        → emergency_alert → retrieve → generate_response → save → END
-    → MEDICATION       → retrieve → generate_response → save → END
-    → LIFESTYLE        → retrieve → generate_response → save → END
+    → BLOCKED        → blocked → END
+    → GENERAL_CHAT   → generate_response → save → END
+    → HEALTH_CONSULT → retrieve → generate_response → save → END
+    → FOLLOWUP       → retrieve → generate_response → save → END
+    → EMERGENCY      → emergency_alert → retrieve → generate_response → save → END
+    → MEDICATION     → retrieve → generate_response → save → END
+    → LIFESTYLE      → retrieve → generate_response → save → END
 
 쿼리 재작성 없이 원본 메시지로 검색하고,
 대화 히스토리는 LLM 프롬프트에 직접 주입하여 맥락을 판단한다.
@@ -23,6 +24,7 @@ from app.graph.nodes import (
     classify_intent_node,
     retrieve_node,
     emergency_node,
+    blocked_node,
     generate_response_node,
     save_conversation_node,
 )
@@ -35,7 +37,9 @@ def _route_by_intent(state: ConversationState) -> str:
     """의도에 따라 다음 노드를 결정한다."""
     intent = state.get("intent", Intent.GENERAL_CHAT)
 
-    if intent == Intent.EMERGENCY:
+    if intent == Intent.BLOCKED:
+        return "blocked"
+    elif intent == Intent.EMERGENCY:
         return "emergency"
     elif intent == Intent.GENERAL_CHAT:
         return "general"
@@ -55,6 +59,7 @@ def build_conversation_graph() -> StateGraph:
     graph.add_node("classify_intent", classify_intent_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("emergency", emergency_node)
+    graph.add_node("blocked", blocked_node)
     graph.add_node("generate_response", generate_response_node)
     graph.add_node("save_conversation", save_conversation_node)
 
@@ -69,11 +74,15 @@ def build_conversation_graph() -> StateGraph:
         "classify_intent",
         _route_by_intent,
         {
+            "blocked": "blocked",
             "emergency": "emergency",
             "general": "generate_response",
             "needs_retrieval": "retrieve",
         },
     )
+
+    # blocked → END (대화 저장 없이 바로 종료)
+    graph.add_edge("blocked", END)
 
     # emergency → retrieve → generate_response
     graph.add_edge("emergency", "retrieve")

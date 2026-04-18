@@ -15,6 +15,17 @@ from app.logger import get_logger
 logger = get_logger(__name__)
 
 
+# ── 프롬프트 유출 시도 키워드 ──
+PROMPT_LEAK_KEYWORDS = [
+    "시스템 프롬프트", "system prompt", "프롬프트를 알려", "프롬프트 알려",
+    "지시를 무시", "ignore previous", "ignore instructions",
+    "당신의 지시", "너의 지시", "instructions are",
+    "프롬프트 내용", "초기 지시", "설정을 알려", "역할을 알려",
+    "jailbreak", "jail break", "역할극", "roleplay as",
+    "pretend you are", "act as if", "act as a",
+    "이전 지시를 무시", "규칙을 무시", "규칙을 어겨",
+]
+
 # ── 응급 키워드 (최우선 매칭) ──
 EMERGENCY_KEYWORDS = [
     "쓰러", "의식", "호흡", "숨을 못", "숨이 안",
@@ -106,6 +117,11 @@ def classify_intent(
     """
     msg = message.strip()
     msg_lower = msg.lower()
+
+    # ── 0단계: 프롬프트 유출 시도 차단 ──
+    if any(kw in msg_lower for kw in PROMPT_LEAK_KEYWORDS):
+        logger.warning(f"🚫 프롬프트 유출 시도 감지: {msg[:50]}")
+        return Intent.BLOCKED, 1.0
 
     # ── 1단계: 응급 상황 체크 (최우선) ──
     emergency_hits = [kw for kw in EMERGENCY_KEYWORDS if kw in msg_lower]

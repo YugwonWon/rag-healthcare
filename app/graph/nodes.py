@@ -216,7 +216,17 @@ def emergency_node(state: ConversationState) -> dict:
 
 
 # ============================================================
-# 노드 6: LLM 응답 생성
+# 노드 6: 차단 응답 (프롬프트 인젝션/유출 시도)
+# ============================================================
+
+def blocked_node(state: ConversationState) -> dict:
+    """프롬프트 유출·인젝션 시도를 차단하고 고정 응답을 반환한다."""
+    logger.warning(f"🚫 차단 응답 | nickname={state['nickname']} | msg={state['message'][:50]}")
+    return {"response": "죄송해요, 그 질문은 답변드리기 어렵습니다. 건강에 대해 궁금한 점이 있으시면 편하게 말씀해 주세요."}
+
+
+# ============================================================
+# 노드 7: LLM 응답 생성
 # ============================================================
 
 async def generate_response_node(state: ConversationState) -> dict:
