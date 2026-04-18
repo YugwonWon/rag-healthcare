@@ -19,12 +19,14 @@ import statistics
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import os
+
 import httpx
 from google import genai
 from google.genai import types
 
 # ── 설정 ──
-GEMINI_API_KEY = "REDACTED"
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 GEMINI_MODEL = "gemini-2.5-flash"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 BASE_MODEL = "kanana-base-raw"
