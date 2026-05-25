@@ -306,6 +306,11 @@ async def generate_response_node(state: ConversationState) -> dict:
             risk_terms=", ".join(terms[:5]),
         )
 
+    # ── L4: 응답 다양성 주입 (호출마다 예시·변주 지침 회전, 응급 제외) ──
+    if intent != Intent.EMERGENCY:
+        intent_value = intent.value if isinstance(intent, Intent) else str(intent)
+        system_prompt += prompts.build_style_addendum(intent_value)
+
     # LLM 호출
     llm = get_llm()
     messages = [
