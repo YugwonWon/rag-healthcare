@@ -616,7 +616,7 @@ HANDSFREE_INIT_JS = """
 """
 
 
-with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
+with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64 {display: none !important;}") as demo:
     
     with gr.Row():
         with gr.Column(scale=4):
@@ -695,8 +695,9 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             voice_reply = gr.Audio(
                 label="🔊 음성 답변", autoplay=True, interactive=False, elem_id="voice_reply"
             )
-            # 핸즈프리 브릿지(숨김): 브라우저 VAD가 base64 WAV를 넣으면 .change로 처리
-            vad_b64 = gr.Textbox(visible=False, elem_id="vad_b64")
+            # 핸즈프리 브릿지: visible=False면 DOM에 textarea가 안 생겨 JS가 못 찾으므로,
+            # 렌더는 하되 CSS(#vad_b64 display:none)로 숨긴다. VAD가 값 주입 → .change로 처리.
+            vad_b64 = gr.Textbox(elem_id="vad_b64")
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
