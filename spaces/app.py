@@ -597,11 +597,13 @@ HANDSFREE_INIT_JS = """
             console.log('[VAD] speech end, samples=', audio && audio.length);
             window.__hfStatus('⏳ 처리 중…');
             const b64 = encodeWAV(audio, 16000);
-            const ta = document.querySelector('#vad_b64 textarea');
-            if (ta) { ta.value = b64; ta.dispatchEvent(new Event('input', { bubbles: true })); }
-            const btn = document.querySelector('#vad_trigger button');
-            if (btn) { btn.click(); console.log('[VAD] trigger clicked'); }
-            else { console.warn('[VAD] #vad_trigger button을 찾지 못함'); }
+            const el = document.querySelector('#vad_b64 textarea') || document.querySelector('#vad_b64 input');
+            if (el) {
+              const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+              Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, b64);
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+              console.log('[VAD] b64 전송(len=' + b64.length + ')');
+            } else { console.warn('[VAD] #vad_b64 입력 요소를 찾지 못함'); }
           }
         });
         console.log('[VAD] MicVAD created');
@@ -698,9 +700,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
             voice_reply = gr.Audio(
                 label="🔊 음성 답변", autoplay=True, interactive=False, elem_id="voice_reply"
             )
-            # 핸즈프리 브릿지(숨김): 브라우저 VAD가 base64 WAV를 넣고 트리거
+            # 핸즈프리 브릿지(숨김): 브라우저 VAD가 base64 WAV를 넣으면 .change로 처리
             vad_b64 = gr.Textbox(visible=False, elem_id="vad_b64")
-            vad_trigger = gr.Button(visible=False, elem_id="vad_trigger")
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
@@ -916,7 +917,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
 
     # 핸즈프리: 버튼 클릭 시 브라우저 VAD 토글(JS), 무음 감지되면 hidden 트리거가 처리
     handsfree_btn.click(fn=None, inputs=None, outputs=None, js="() => window.hfToggle()")
-    vad_trigger.click(
+    vad_b64.change(
         fn=voice_chat_b64_fn,
         inputs=[nickname_input, vad_b64, chatbot],
         outputs=[chatbot, voice_reply, vad_b64],
