@@ -768,14 +768,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
 
         # 관리자 탭 (교수/연구자용 — 대화 기록 조회/CSV 다운로드)
         with gr.TabItem("🔐 관리자"):
-            gr.Markdown(
-                """
-                ### 🔐 관리자 — 대화 기록 조회/다운로드
-                연구 책임자/교수용 화면입니다. 비밀번호로 로그인한 뒤 전체 대화 기록을
-                웹에서 표로 보거나 CSV로 내려받을 수 있습니다.
-                """,
-                elem_classes=["info-box"]
-            )
+            gr.Markdown("### 🔐 관리자 메뉴", elem_classes=["info-box"])
             admin_pw = gr.Textbox(
                 label="관리자 비밀번호",
                 type="password",
