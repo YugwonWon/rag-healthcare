@@ -29,6 +29,8 @@ services:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       # MPS(Metal GPU)는 Docker 컨테이너에서 사용 불가 → CPU fallback
       - EMBEDDING_DEVICE=cpu
+      # MeloTTS 사이드카는 호스트 네이티브(.venv-tts, py3.11)로 실행 → 컨테이너에서 호스트로 접근
+      - MELO_TTS_URL=http://host.docker.internal:8181/synth
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

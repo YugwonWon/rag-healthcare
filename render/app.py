@@ -324,6 +324,65 @@ async def chat_with_bot(
     return history, ""
 
 
+async def voice_chat_fn(nickname: str, audio_path, history: list):
+    """음성 채팅: 녹음 → 백엔드 /voice-chat 전사·응답 → 대화창 표시 + TTS 음성 재생.
+
+    반환: (대화기록, TTS음성파일경로, 마이크입력초기화None)
+    """
+    if not nickname or not nickname.strip():
+        history = history or []
+        history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
+        return history, None, None
+    if not audio_path:
+        return history or [], None, None
+
+    history = history or []
+    if nickname not in user_sessions:
+        await call_api("/profile", "POST", {"nickname": nickname})
+        user_sessions[nickname] = {"started_at": datetime.now().isoformat()}
+
+    headers = {"ngrok-skip-browser-warning": "true"}
+    transcript, response = "", ""
+    try:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+            with open(audio_path, "rb") as f:
+                files = {"audio": (os.path.basename(audio_path), f, "audio/wav")}
+                resp = await client.post(
+                    f"{BACKEND_URL}/voice-chat", files=files, data={"nickname": nickname}
+                )
+            if resp.status_code == 200:
+                j = resp.json()
+                transcript = (j.get("transcript") or "").strip()
+                response = (j.get("response") or "").strip()
+            else:
+                response = "죄송해요, 음성 처리 중 오류가 났어요. 다시 말씀해 주세요."
+    except httpx.HTTPError as e:
+        print(f"❌ voice-chat 에러: {e}")
+        response = "서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
+
+    if not transcript:
+        history.append({"role": "assistant", "content": response or "잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?"})
+        return history, None, None
+
+    history.append({"role": "user", "content": f"🎤 {transcript}"})
+    history.append({"role": "assistant", "content": response})
+
+    # 응답을 음성으로 (TTS) — 실패해도 텍스트 대화는 유지
+    tts_path = None
+    try:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+            tr = await client.post(f"{BACKEND_URL}/tts", json={"text": response})
+        if tr.status_code == 200:
+            ext = ".mp3" if "mpeg" in tr.headers.get("content-type", "") else ".wav"
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
+                tf.write(tr.content)
+                tts_path = tf.name
+    except httpx.HTTPError as e:
+        print(f"❌ tts 에러: {e}")
+
+    return history, tts_path, None
+
+
 async def on_nickname_submit(nickname: str) -> tuple[str, str]:
     """닉네임 제출 시 인사말 표시"""
     if not nickname.strip():
@@ -502,6 +561,17 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                     label="🌐 English Translation (영어 번역)",
                     value=False
                 )
+
+            # 음성 대화 (텍스트와 병행) — 마이크로 말하고 음성으로 답변
+            with gr.Row():
+                voice_input = gr.Audio(
+                    sources=["microphone"],
+                    type="filepath",
+                    label="🎤 눌러서 말하기 — 녹음 후 ■(정지)를 누르면 자동으로 전송됩니다",
+                )
+            voice_reply = gr.Audio(
+                label="🔊 음성 답변", autoplay=True, interactive=False
+            )
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
@@ -712,6 +782,14 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     )
     
     clear_btn.click(fn=lambda: [], inputs=None, outputs=chatbot, api_name=False)
+
+    # 음성: 녹음 정지 시 자동 전송 → 전사·응답 표시 + 음성 답변 재생
+    voice_input.stop_recording(
+        fn=voice_chat_fn,
+        inputs=[nickname_input, voice_input, chatbot],
+        outputs=[chatbot, voice_reply, voice_input],
+        api_name=False,
+    )
     
     # 상태 체크 이벤트
     refresh_status_btn.click(
