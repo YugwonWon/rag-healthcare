@@ -3,6 +3,7 @@ FastAPI 메인 서버
 치매노인 맞춤형 헬스케어 RAG 챗봇 API
 """
 
+import asyncio
 import csv
 import io
 import time
@@ -199,7 +200,18 @@ async def lifespan(app: FastAPI):
         logger.info(f"🧠 Neo4j Knowledge Graph 초기화 완료 | 노드={stats['node_count']}, 엣지={stats['edge_count']}")
     except Exception as e:
         logger.warning(f"Neo4j Knowledge Graph 초기화 실패 (비필수): {e}")
-    
+
+    # 음성 STT 모델 워밍업 (백그라운드 — 앱은 즉시 응답, 첫 음성 요청의 콜드스타트 방지)
+    if settings.VOICE_ENABLED:
+        async def _warm_stt():
+            try:
+                from app.voice import stt as _voice_stt
+                await asyncio.to_thread(_voice_stt.warmup)
+            except Exception as e:
+                logger.warning(f"STT 워밍업 태스크 오류(비필수): {e}")
+        asyncio.create_task(_warm_stt())
+        logger.info("🎙️ STT 모델 워밍업 시작(백그라운드)")
+
     yield
     
     # 종료 시

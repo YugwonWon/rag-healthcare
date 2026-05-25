@@ -74,3 +74,25 @@ def transcribe(audio_path: str, language: Optional[str] = None) -> str:
     text = "".join(seg.text for seg in segments).strip()
     logger.info(f"STT 전사 완료 | lang={lang} | len={len(text)}")
     return text
+
+
+def warmup() -> bool:
+    """STT 모델을 미리 로드(필요 시 다운로드)한다.
+
+    컨테이너 startup에서 호출해 첫 사용자 요청의 콜드스타트(모델 다운로드+로드) 지연을 없앤다.
+    무음 더미 입력으로 VAD 필터까지 한 번 돌려 전체 경로를 초기화한다."""
+    if settings.STT_ENGINE == "mlx-whisper":
+        # mlx는 파일 기반 로드라 더미 워밍업은 생략(첫 요청 시 로드)
+        return True
+    try:
+        import numpy as np
+        model = _get_faster_whisper()
+        segments, _ = model.transcribe(
+            np.zeros(16000, dtype=np.float32), language=settings.STT_LANGUAGE, vad_filter=True
+        )
+        list(segments)  # 생성자 소비 → 실제 초기화 완료
+        logger.info("STT 워밍업 완료")
+        return True
+    except Exception as e:
+        logger.warning(f"STT 워밍업 실패(첫 요청 시 재시도): {e}")
+        return False
