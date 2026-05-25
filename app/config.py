@@ -132,7 +132,9 @@ class Settings(BaseSettings):
     VOICE_ENABLED: bool = True
     # STT (음성 인식)
     STT_ENGINE: str = "faster-whisper"   # faster-whisper | mlx-whisper(Mac GPU 최속)
-    STT_MODEL: str = "large-v3-turbo"     # 정확/속도 균형. 가볍게: "medium"/"small"
+    # Docker 컨테이너는 CPU 추론(Metal 불가)이라 large-v3는 매우 느림(~80s).
+    # small이 CPU에서 빠르고 한국어 정확도도 충분. 정확도 우선 시 medium/large-v3-turbo.
+    STT_MODEL: str = "small"
     STT_DEVICE: str = "auto"              # auto|cpu|cuda (faster-whisper는 Mac에서 cpu/int8)
     STT_COMPUTE_TYPE: str = "int8"        # int8|float16|int8_float16
     STT_LANGUAGE: str = "ko"

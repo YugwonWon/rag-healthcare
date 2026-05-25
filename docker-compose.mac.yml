@@ -31,6 +31,8 @@ services:
       - EMBEDDING_DEVICE=cpu
       # MeloTTS 사이드카는 호스트 네이티브(.venv-tts, py3.11)로 실행 → 컨테이너에서 호스트로 접근
       - MELO_TTS_URL=http://host.docker.internal:8181/synth
+      # 컨테이너는 CPU 추론이라 large-v3는 너무 느림(~80s) → small (정확도 충분, 훨씬 빠름)
+      - STT_MODEL=small
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
