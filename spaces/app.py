@@ -352,8 +352,8 @@ async def _voice_process(nickname: str, audio_path: str, history: list):
             else:
                 response = "죄송해요, 음성 처리 중 오류가 났어요. 다시 말씀해 주세요."
     except httpx.HTTPError as e:
-        print(f"❌ voice-chat 에러: {e}")
-        response = "서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요."
+        print(f"❌ voice-chat 에러: {type(e).__name__}: {e}")
+        response = f"[음성 오류] {type(e).__name__}: {str(e)[:140]}"
 
     if not transcript:
         history.append({"role": "assistant", "content": response or "잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?"})
