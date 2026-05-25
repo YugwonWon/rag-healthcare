@@ -324,18 +324,8 @@ async def chat_with_bot(
     return history, ""
 
 
-async def voice_chat_fn(nickname: str, audio_path, history: list):
-    """음성 채팅: 녹음 → 백엔드 /voice-chat 전사·응답 → 대화창 표시 + TTS 음성 재생.
-
-    반환: (대화기록, TTS음성파일경로, 마이크입력초기화None)
-    """
-    if not nickname or not nickname.strip():
-        history = history or []
-        history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
-        return history, None, None
-    if not audio_path:
-        return history or [], None, None
-
+async def _voice_process(nickname: str, audio_path: str, history: list):
+    """오디오 파일 → /voice-chat 전사·응답 → 대화기록 추가 + TTS 음성경로. (history, tts_path)"""
     history = history or []
     if nickname not in user_sessions:
         await call_api("/profile", "POST", {"nickname": nickname})
@@ -362,12 +352,11 @@ async def voice_chat_fn(nickname: str, audio_path, history: list):
 
     if not transcript:
         history.append({"role": "assistant", "content": response or "잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?"})
-        return history, None, None
+        return history, None
 
     history.append({"role": "user", "content": f"🎤 {transcript}"})
     history.append({"role": "assistant", "content": response})
 
-    # 응답을 음성으로 (TTS) — 실패해도 텍스트 대화는 유지
     tts_path = None
     try:
         async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
@@ -379,8 +368,42 @@ async def voice_chat_fn(nickname: str, audio_path, history: list):
                 tts_path = tf.name
     except httpx.HTTPError as e:
         print(f"❌ tts 에러: {e}")
+    return history, tts_path
 
+
+async def voice_chat_fn(nickname: str, audio_path, history: list):
+    """press-to-talk 마이크(파일경로) 입구."""
+    if not nickname or not nickname.strip():
+        history = history or []
+        history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
+        return history, None, None
+    if not audio_path:
+        return history or [], None, None
+    history, tts_path = await _voice_process(nickname, audio_path, history)
     return history, tts_path, None
+
+
+async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
+    """핸즈프리(브라우저 VAD)가 보낸 base64 WAV 입구."""
+    if not audio_b64:
+        return history or [], None, ""
+    if not nickname or not nickname.strip():
+        history = history or []
+        history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
+        return history, None, ""
+    import base64
+    raw = base64.b64decode(audio_b64.split(",")[-1])
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        tf.write(raw)
+        path = tf.name
+    try:
+        history, tts_path = await _voice_process(nickname, path, history)
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return history, tts_path, ""  # 마지막 ""로 hidden textbox 초기화
 
 
 async def on_nickname_submit(nickname: str) -> tuple[str, str]:
@@ -496,6 +519,90 @@ CUSTOM_CSS = """
 """
 
 # Gradio UI 구성
+# 핸즈프리(브라우저 VAD) 초기화 JS — @ricky0123/vad-web로 무음 감지 후 자동 전송.
+# 백엔드는 기존 /voice-chat, /tts 사용. 답변 재생 중에는 VAD를 멈춰 에코를 방지.
+HANDSFREE_INIT_JS = """
+() => {
+  if (window.__hfInit) return;
+  window.__hfInit = true;
+  window.__hfActive = false;
+  window.__hfVAD = null;
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      if (document.querySelector('script[src="' + src + '"]')) { resolve(); return; }
+      const s = document.createElement('script');
+      s.src = src; s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  function encodeWAV(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const w = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); w(8, 'WAVE');
+    w(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    w(36, 'data'); view.setUint32(40, samples.length * 2, true);
+    let off = 44;
+    for (let i = 0; i < samples.length; i++, off += 2) {
+      let s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    let bytes = new Uint8Array(buffer), bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin);
+  }
+  window.__hfStatus = (msg) => {
+    const el = document.querySelector('#handsfree_status');
+    if (el) { const t = el.querySelector('p, span, .prose'); (t || el).textContent = msg; }
+  };
+  window.__hfHookReply = () => {
+    const a = document.querySelector('#voice_reply audio');
+    if (a && !a.__hfHooked) {
+      a.__hfHooked = true;
+      a.addEventListener('play', () => { if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (e) {} } });
+      a.addEventListener('ended', () => { if (window.__hfActive && window.__hfVAD) { try { window.__hfVAD.start(); window.__hfStatus('🎧 듣는 중…'); } catch (e) {} } });
+    }
+  };
+  window.hfToggle = async () => {
+    try {
+      if (window.__hfActive) {
+        if (window.__hfVAD) window.__hfVAD.pause();
+        window.__hfActive = false; window.__hfStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
+        return;
+      }
+      window.__hfStatus('🎤 마이크 준비 중…');
+      if (!window.__hfVADLoaded) {
+        await loadScript('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/ort.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/bundle.min.js');
+        window.__hfVADLoaded = true;
+      }
+      if (!window.__hfVAD) {
+        window.__hfVAD = await vad.MicVAD.new({
+          onSpeechStart: () => window.__hfStatus('🗣️ 말하는 중…'),
+          onSpeechEnd: (audio) => {
+            window.__hfStatus('⏳ 처리 중…');
+            const b64 = encodeWAV(audio, 16000);
+            const ta = document.querySelector('#vad_b64 textarea');
+            if (ta) { ta.value = b64; ta.dispatchEvent(new Event('input', { bubbles: true })); }
+            const btn = document.querySelector('#vad_trigger button');
+            if (btn) btn.click();
+          }
+        });
+      }
+      await window.__hfVAD.start();
+      window.__hfActive = true; window.__hfStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
+      window.__hfHookReply();
+    } catch (e) {
+      console.error('hands-free error', e);
+      window.__hfStatus('❌ 마이크/VAD 초기화 실패 — 브라우저 콘솔을 확인하세요');
+    }
+  };
+}
+"""
+
+
 with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     
     with gr.Row():
@@ -562,16 +669,22 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                     value=False
                 )
 
-            # 음성 대화 (텍스트와 병행) — 마이크로 말하고 음성으로 답변
+            # 음성 대화 (텍스트와 병행)
             with gr.Row():
+                handsfree_btn = gr.Button("🎧 핸즈프리 대화 시작 / 중지", variant="secondary")
+                handsfree_status = gr.Markdown("", elem_id="handsfree_status")
+            with gr.Accordion("🎤 또는 눌러서 말하기 (수동)", open=False):
                 voice_input = gr.Audio(
                     sources=["microphone"],
                     type="filepath",
-                    label="🎤 눌러서 말하기 — 녹음 후 ■(정지)를 누르면 자동으로 전송됩니다",
+                    label="녹음 후 ■(정지)를 누르면 전송됩니다",
                 )
             voice_reply = gr.Audio(
-                label="🔊 음성 답변", autoplay=True, interactive=False
+                label="🔊 음성 답변", autoplay=True, interactive=False, elem_id="voice_reply"
             )
+            # 핸즈프리 브릿지(숨김): 브라우저 VAD가 base64 WAV를 넣고 트리거
+            vad_b64 = gr.Textbox(visible=False, elem_id="vad_b64")
+            vad_trigger = gr.Button(visible=False, elem_id="vad_trigger")
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
@@ -783,13 +896,24 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
     
     clear_btn.click(fn=lambda: [], inputs=None, outputs=chatbot, api_name=False)
 
-    # 음성: 녹음 정지 시 자동 전송 → 전사·응답 표시 + 음성 답변 재생
+    # 음성(수동): 녹음 정지 시 자동 전송 → 전사·응답 표시 + 음성 답변 재생
     voice_input.stop_recording(
         fn=voice_chat_fn,
         inputs=[nickname_input, voice_input, chatbot],
         outputs=[chatbot, voice_reply, voice_input],
         api_name=False,
     )
+
+    # 핸즈프리: 버튼 클릭 시 브라우저 VAD 토글(JS), 무음 감지되면 hidden 트리거가 처리
+    handsfree_btn.click(fn=None, inputs=None, outputs=None, js="() => window.hfToggle()")
+    vad_trigger.click(
+        fn=voice_chat_b64_fn,
+        inputs=[nickname_input, vad_b64, chatbot],
+        outputs=[chatbot, voice_reply, vad_b64],
+        api_name=False,
+    )
+    # 페이지 로드 시 핸즈프리 JS 초기화
+    demo.load(fn=None, inputs=None, outputs=None, js=HANDSFREE_INIT_JS)
     
     # 상태 체크 이벤트
     refresh_status_btn.click(
