@@ -671,7 +671,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
 
             # 음성 대화 (텍스트와 병행)
             with gr.Row():
-                handsfree_btn = gr.Button("🎧 핸즈프리 대화 시작 / 중지", variant="secondary")
+                handsfree_btn = gr.Button("🎤 음성 대화 시작 / 중지", variant="secondary")
                 handsfree_status = gr.Markdown("", elem_id="handsfree_status")
             with gr.Accordion("🎤 또는 눌러서 말하기 (수동)", open=False):
                 voice_input = gr.Audio(
