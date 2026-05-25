@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Security
+from fastapi import FastAPI, HTTPException, Depends, Request, Security, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security.api_key import APIKeyHeader
@@ -86,6 +86,12 @@ class DocumentRequest(BaseModel):
     """문서 추가 요청"""
     documents: list[str]
     metadatas: Optional[list[dict]] = None
+
+
+class TTSRequest(BaseModel):
+    """음성 합성 요청"""
+    text: str = Field(..., min_length=1, description="합성할 텍스트")
+    speed: Optional[float] = Field(default=None, description="말하기 속도(미지정 시 설정값)")
 
 
 class HealthStatusResponse(BaseModel):
@@ -366,6 +372,112 @@ async def chat(
     except Exception as e:
         logger.error(f"채팅 처리 중 오류: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"채팅 처리 중 오류: {str(e)}")
+
+
+# ==========================================
+# 음성 (STT / TTS / 음성 채팅)
+# ==========================================
+# 음성 의존성(faster-whisper / MeloTTS)은 지연 로딩이라 미설치 시 503을 반환한다.
+
+async def _save_upload_to_tempfile(audio: UploadFile) -> str:
+    import os as _os
+    import tempfile as _tf
+    suffix = _os.path.splitext(audio.filename or "")[1] or ".wav"
+    data = await audio.read()
+    with _tf.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(data)
+        return f.name
+
+
+@app.post("/stt")
+async def speech_to_text(
+    audio: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+):
+    """음성 → 텍스트(전사). 온디바이스 Whisper."""
+    if not settings.VOICE_ENABLED:
+        raise HTTPException(status_code=503, detail="음성 기능이 비활성화되어 있습니다.")
+    import os as _os
+    from app.voice import stt as voice_stt
+    path = await _save_upload_to_tempfile(audio)
+    try:
+        text = voice_stt.transcribe(path, language=language)
+        return {"text": text}
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"STT 엔진이 설치되지 않았습니다: {e}")
+    except Exception as e:
+        logger.error(f"STT 처리 오류: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"STT 처리 오류: {str(e)}")
+    finally:
+        try:
+            _os.remove(path)
+        except OSError:
+            pass
+
+
+@app.post("/tts")
+async def text_to_speech(request: TTSRequest):
+    """텍스트 → 음성(WAV). 한국어 MeloTTS."""
+    if not settings.VOICE_ENABLED:
+        raise HTTPException(status_code=503, detail="음성 기능이 비활성화되어 있습니다.")
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text가 비어 있습니다.")
+    from app.voice import tts as voice_tts
+    try:
+        audio, media_type = voice_tts.synthesize(text, speed=request.speed)
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"TTS 엔진이 설치되지 않았습니다: {e}")
+    except Exception as e:
+        logger.error(f"TTS 처리 오류: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"TTS 처리 오류: {str(e)}")
+    return Response(content=audio, media_type=media_type)
+
+
+@app.post("/voice-chat")
+async def voice_chat(
+    audio: UploadFile = File(...),
+    nickname: str = Form(...),
+    handler=Depends(get_handler),
+):
+    """음성 채팅: 음성 전사 → 기존 대화 파이프라인 → 응답 텍스트 반환.
+
+    전사 텍스트를 함께 반환해 화면에 표시(STT 오인식 확인). 음성 출력(TTS)은
+    프론트가 응답 텍스트로 /tts를 호출하거나 재생 버튼에서 처리한다.
+    """
+    if not settings.VOICE_ENABLED:
+        raise HTTPException(status_code=503, detail="음성 기능이 비활성화되어 있습니다.")
+    import os as _os
+    from app.voice import stt as voice_stt
+    path = await _save_upload_to_tempfile(audio)
+    try:
+        transcript = voice_stt.transcribe(path)
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=f"STT 엔진이 설치되지 않았습니다: {e}")
+    except Exception as e:
+        logger.error(f"음성 전사 오류: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"음성 전사 오류: {str(e)}")
+    finally:
+        try:
+            _os.remove(path)
+        except OSError:
+            pass
+
+    if not transcript:
+        return {"transcript": "", "response": "죄송해요, 잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?",
+                "intent": None, "emergency_alert": None}
+
+    # 전사 텍스트를 기존 대화 파이프라인에 그대로 투입 (응급 감지 등 그래프 로직 포함)
+    result = await handler.process_query(nickname=nickname, query=transcript, include_history=True)
+    response = result.get("response", "") if isinstance(result, dict) else result
+    intent = result.get("intent") if isinstance(result, dict) else None
+    emergency_alert = result.get("emergency_alert") if isinstance(result, dict) else None
+    return {
+        "transcript": transcript,
+        "response": response,
+        "intent": intent,
+        "emergency_alert": emergency_alert,
+    }
 
 
 @app.post("/greeting", response_model=GreetingResponse)

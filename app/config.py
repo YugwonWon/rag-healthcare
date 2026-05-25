@@ -126,6 +126,29 @@ class Settings(BaseSettings):
     # ADMIN_API_KEY와 별개 — 프론트 관리자 탭에서 입력받아 검증한다.
     ADMIN_PASSWORD: Optional[str] = None
 
+    # ── 음성(STT/TTS) 설정 ──
+    # 온디바이스 처리(환자 음성 외부 미전송)를 기본으로 한다. 음성 의존성이 없어도
+    # 앱은 정상 기동하며, 음성 엔드포인트만 503을 반환한다(지연 로딩).
+    VOICE_ENABLED: bool = True
+    # STT (음성 인식)
+    STT_ENGINE: str = "faster-whisper"   # faster-whisper | mlx-whisper(Mac GPU 최속)
+    STT_MODEL: str = "large-v3-turbo"     # 정확/속도 균형. 가볍게: "medium"/"small"
+    STT_DEVICE: str = "auto"              # auto|cpu|cuda (faster-whisper는 Mac에서 cpu/int8)
+    STT_COMPUTE_TYPE: str = "int8"        # int8|float16|int8_float16
+    STT_LANGUAGE: str = "ko"
+    # TTS (음성 합성) — 엔진별 트레이드오프:
+    #   edge: MS Edge 온라인, 한국어 최상·설치 간단(텍스트만 외부 전송)
+    #   say : macOS 내장(Yuna), 완전 온디바이스·무설치, 품질 보통  ← 프라이버시 우선이면 이걸로
+    #   melo: MeloTTS 온디바이스 고품질(설치 까다로움)
+    # 기본 melo(사이드카) — 미실행 시 명확한 에러. 폴백: edge(클라우드)·say(온디바이스 무설치)
+    TTS_ENGINE: str = "melo"
+    TTS_VOICE: str = "ko-KR-SunHiNeural"  # edge: ko-KR-SunHiNeural/ko-KR-InJoonNeural | say: Yuna
+    TTS_LANGUAGE: str = "KR"               # melo 전용 언어 코드
+    TTS_SPEED: float = 0.9                 # 노인 대상: 약간 느리고 또렷하게
+    TTS_DEVICE: str = "auto"               # melo 전용: auto|cpu|mps|cuda
+    # melo 엔진은 별도 .venv-tts 사이드카(HTTP)로 동작 (메인 venv와 공존 불가)
+    MELO_TTS_URL: str = "http://127.0.0.1:8181/synth"
+
     # Bareun 형태소 분석기 API 키
     BAREUN_API_KEY: Optional[str] = None
 

@@ -53,3 +53,11 @@ pandas>=2.0.0
 # ============================================
 python-dotenv>=1.0.0
 python-multipart>=0.0.6
+
+# ============================================
+# Voice (STT/TTS) — 지연 로딩, 미설치 시 음성 엔드포인트만 503
+# ============================================
+faster-whisper>=1.0.0   # STT (온디바이스 Whisper)
+edge-tts>=6.1.0          # TTS 기본 엔진(MS Edge, 한국어 최상). 'say'(macOS)는 무설치
+# Mac GPU(Apple Silicon) STT 최속: pip install mlx-whisper
+# 온디바이스 고품질 TTS(MeloTTS): pip install git+https://github.com/myshell-ai/MeloTTS.git
