@@ -580,6 +580,8 @@ HANDSFREE_INIT_JS = """
       }
       if (!window.__hfVAD) {
         window.__hfVAD = await vad.MicVAD.new({
+          baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/',
+          onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/',
           onSpeechStart: () => window.__hfStatus('🗣️ 말하는 중…'),
           onSpeechEnd: (audio) => {
             window.__hfStatus('⏳ 처리 중…');
