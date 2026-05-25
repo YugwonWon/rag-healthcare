@@ -427,12 +427,24 @@ async def speech_to_text(
             pass
 
 
+def _truncate_for_tts(text: str, max_chars: int = 300) -> str:
+    """음성 답변은 짧아야 듣기 좋고 TTS도 안정적(긴 입력은 melo가 실패하기도 함).
+    max_chars 초과 시 문장 경계에서 자른다. (대화창 텍스트는 전체가 그대로 표시됨)"""
+    text = (text or "").strip()
+    if len(text) <= max_chars:
+        return text
+    head = text[:max_chars]
+    cut = max(head.rfind("."), head.rfind("?"), head.rfind("!"),
+              head.rfind("…"), head.rfind("\n"))
+    return head[:cut + 1] if cut >= max_chars // 2 else head
+
+
 @app.post("/tts")
 async def text_to_speech(request: TTSRequest):
     """텍스트 → 음성(WAV). 한국어 MeloTTS."""
     if not settings.VOICE_ENABLED:
         raise HTTPException(status_code=503, detail="음성 기능이 비활성화되어 있습니다.")
-    text = request.text.strip()
+    text = _truncate_for_tts(request.text)
     if not text:
         raise HTTPException(status_code=400, detail="text가 비어 있습니다.")
     from app.voice import tts as voice_tts
