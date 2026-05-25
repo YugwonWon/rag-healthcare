@@ -582,18 +582,27 @@ HANDSFREE_INIT_JS = """
         window.__hfVAD = await vad.MicVAD.new({
           baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/',
           onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/',
-          onSpeechStart: () => window.__hfStatus('🗣️ 말하는 중…'),
+          positiveSpeechThreshold: 0.5,
+          negativeSpeechThreshold: 0.35,
+          minSpeechFrames: 3,
+          redemptionFrames: 24,
+          onSpeechStart: () => { console.log('[VAD] speech start'); window.__hfStatus('🗣️ 말하는 중…'); },
+          onVADMisfire: () => { console.log('[VAD] misfire(너무 짧음)'); window.__hfStatus('🎧 듣는 중… (조금 더 또렷이 말씀해 주세요)'); },
           onSpeechEnd: (audio) => {
+            console.log('[VAD] speech end, samples=', audio && audio.length);
             window.__hfStatus('⏳ 처리 중…');
             const b64 = encodeWAV(audio, 16000);
             const ta = document.querySelector('#vad_b64 textarea');
             if (ta) { ta.value = b64; ta.dispatchEvent(new Event('input', { bubbles: true })); }
             const btn = document.querySelector('#vad_trigger button');
-            if (btn) btn.click();
+            if (btn) { btn.click(); console.log('[VAD] trigger clicked'); }
+            else { console.warn('[VAD] #vad_trigger button을 찾지 못함'); }
           }
         });
+        console.log('[VAD] MicVAD created');
       }
       await window.__hfVAD.start();
+      console.log('[VAD] started, listening');
       window.__hfActive = true; window.__hfStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
       window.__hfHookReply();
     } catch (e) {
