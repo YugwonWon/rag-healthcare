@@ -131,13 +131,19 @@ class Settings(BaseSettings):
     # 앱은 정상 기동하며, 음성 엔드포인트만 503을 반환한다(지연 로딩).
     VOICE_ENABLED: bool = True
     # STT (음성 인식)
-    STT_ENGINE: str = "faster-whisper"   # faster-whisper | mlx-whisper(Mac GPU 최속)
-    # Docker 컨테이너는 CPU 추론(Metal 불가)이라 large-v3는 매우 느림(~80s).
-    # small이 CPU에서 빠르고 한국어 정확도도 충분. 정확도 우선 시 medium/large-v3-turbo.
+    # STT_ENGINE 옵션:
+    #   faster-whisper : 컨테이너 내 CPU 추론(이식성↑, Cloud Run 등). 느림(small 권장).
+    #   sidecar        : 호스트 mlx-whisper(Metal GPU) 사이드카 HTTP 호출. M4에서 빠름(권장).
+    #   mlx-whisper    : 같은 프로세스에서 mlx 직접(호스트 네이티브 실행 시)
+    STT_ENGINE: str = "faster-whisper"
+    # faster-whisper(컨테이너 CPU)용: large-v3는 매우 느림(~80s) → small 권장
     STT_MODEL: str = "small"
     STT_DEVICE: str = "auto"              # auto|cpu|cuda (faster-whisper는 Mac에서 cpu/int8)
     STT_COMPUTE_TYPE: str = "int8"        # int8|float16|int8_float16
     STT_LANGUAGE: str = "ko"
+    # STT 사이드카(호스트 mlx-whisper, Metal GPU) — 컨테이너에서 호스트로 접근
+    STT_SIDECAR_URL: str = "http://127.0.0.1:8182/transcribe"
+    STT_MLX_REPO: str = "mlx-community/whisper-large-v3-turbo"  # GPU라 큰 모델도 빠름
     # TTS (음성 합성) — 엔진별 트레이드오프:
     #   edge: MS Edge 온라인, 한국어 최상·설치 간단(텍스트만 외부 전송)
     #   say : macOS 내장(Yuna), 완전 온디바이스·무설치, 품질 보통  ← 프라이버시 우선이면 이걸로

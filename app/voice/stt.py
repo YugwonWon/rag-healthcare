@@ -45,6 +45,25 @@ def _get_faster_whisper():
     return _fw_model
 
 
+def _transcribe_sidecar(audio_path: str, language: str) -> str:
+    """호스트 STT 사이드카(mlx-whisper, Metal GPU)에 오디오를 보내 전사한다."""
+    import httpx
+    url = settings.STT_SIDECAR_URL
+    try:
+        with open(audio_path, "rb") as f:
+            files = {"audio": (os.path.basename(audio_path), f, "audio/wav")}
+            resp = httpx.post(url, files=files, data={"language": language}, timeout=60.0)
+        resp.raise_for_status()
+    except httpx.ConnectError as e:
+        raise RuntimeError(
+            f"STT 사이드카에 연결할 수 없습니다({url}). "
+            "'./scripts/run_stt_sidecar.sh'로 사이드카를 먼저 실행하세요."
+        ) from e
+    text = (resp.json().get("text") or "").strip()
+    logger.info(f"STT 전사(sidecar) 완료 | lang={language} | len={len(text)}")
+    return text
+
+
 def transcribe(audio_path: str, language: Optional[str] = None) -> str:
     """오디오 파일을 텍스트로 전사한다.
 
@@ -58,9 +77,12 @@ def transcribe(audio_path: str, language: Optional[str] = None) -> str:
     lang = language or settings.STT_LANGUAGE
     engine = settings.STT_ENGINE
 
+    if engine == "sidecar":
+        return _transcribe_sidecar(audio_path, lang)
+
     if engine == "mlx-whisper":
         import mlx_whisper  # 지연 로딩 (Apple Silicon 전용)
-        repo = f"mlx-community/whisper-{settings.STT_MODEL}"
+        repo = settings.STT_MLX_REPO
         logger.info(f"STT 전사(mlx-whisper): repo={repo} | lang={lang}")
         result = mlx_whisper.transcribe(
             audio_path, path_or_hf_repo=repo, language=lang
@@ -81,8 +103,8 @@ def warmup() -> bool:
 
     컨테이너 startup에서 호출해 첫 사용자 요청의 콜드스타트(모델 다운로드+로드) 지연을 없앤다.
     무음 더미 입력으로 VAD 필터까지 한 번 돌려 전체 경로를 초기화한다."""
-    if settings.STT_ENGINE == "mlx-whisper":
-        # mlx는 파일 기반 로드라 더미 워밍업은 생략(첫 요청 시 로드)
+    if settings.STT_ENGINE in ("sidecar", "mlx-whisper"):
+        # 사이드카는 자체 startup에서 워밍업 / mlx는 파일 기반 로드 → 컨테이너 워밍업 불필요
         return True
     try:
         import numpy as np
