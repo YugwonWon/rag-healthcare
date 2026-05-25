@@ -3,6 +3,8 @@ FastAPI 메인 서버
 치매노인 맞춤형 헬스케어 RAG 챗봇 API
 """
 
+import csv
+import io
 import time
 from datetime import datetime
 from typing import Optional
@@ -10,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 
@@ -113,6 +116,9 @@ async def lifespan(app: FastAPI):
     store = get_store()
     await store.init_pool()
     logger.info("🐘 PostgreSQL 연결 풀 초기화 완료")
+
+    # 연구·분석용 대화 로그 테이블 보장 (idempotent)
+    await store.ensure_analytics_schema()
     
     # pgvector에 문서가 0개이면 healthcare_docs 자동 로드
     try:
@@ -221,6 +227,15 @@ _api_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
 async def require_admin_key(key: str = Security(_api_key_header)):
     if not settings.ADMIN_API_KEY or key != settings.ADMIN_API_KEY:
         raise HTTPException(status_code=403, detail="관리자 키가 필요합니다.")
+
+
+# 관리자 비밀번호 인증 (교수/연구자용 관리 화면 — 대화 기록 CSV 다운로드)
+_admin_pw_header = APIKeyHeader(name="X-Admin-Password", auto_error=False)
+
+async def require_admin_password(pw: str = Security(_admin_pw_header)):
+    if not settings.ADMIN_PASSWORD or pw != settings.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="관리자 비밀번호가 올바르지 않습니다.")
+    return True
 
 
 # 요청/응답 로깅 미들웨어
@@ -520,6 +535,89 @@ async def get_stats():
             "rag_top_k": settings.RAG_TOP_K
         }
     }
+
+
+# ==========================================
+# 관리자 — 대화 기록 CSV 다운로드 (교수/연구자용)
+# ==========================================
+
+def _rows_to_csv(rows: list[dict], fieldnames: list[str]) -> str:
+    """행 목록을 CSV 문자열로 직렬화한다."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
+@app.post("/admin/login")
+async def admin_login(_=Depends(require_admin_password)):
+    """관리자 비밀번호 검증 (프론트 관리자 탭 로그인용)."""
+    return {"ok": True}
+
+
+@app.get("/admin/conversations.csv")
+async def download_conversations_csv(
+    source: str = "history",
+    nickname: Optional[str] = None,
+    _=Depends(require_admin_password),
+    store=Depends(get_store),
+):
+    """대화 기록을 CSV로 다운로드 (관리자 전용).
+
+    - source=history : 전체 런타임 대화(chat_history). 타임스탬프·메타데이터 없음.
+    - source=logs    : 분석 로그(conversation_logs). KST 타임스탬프 + 인텐트/위험도 등.
+    - nickname 지정 시 해당 이용자만 추출.
+    """
+    if source == "logs":
+        rows = await store.fetch_conversation_log_rows(nickname)
+        fields = store.CONVERSATION_LOG_FIELDS
+        base = "conversation_logs"
+    else:
+        rows = await store.fetch_chat_history_rows(nickname)
+        fields = store.CHAT_HISTORY_FIELDS
+        base = "conversations"
+
+    csv_text = _rows_to_csv(rows, fields)
+    # 엑셀 한글 호환을 위한 UTF-8 BOM
+    content = ("\ufeff" + csv_text).encode("utf-8")
+
+    stamp = get_kst_now().strftime("%Y%m%d_%H%M")
+    # 한글 닉네임은 Content-Disposition(latin-1) 인코딩 문제가 있어 ASCII만 파일명에 포함
+    suffix = f"_{nickname}" if nickname and nickname.isascii() else ""
+    filename = f"{base}{suffix}_{stamp}.csv"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    logger.info(f"📥 관리자 CSV 다운로드 | source={source} | rows={len(rows)} | nickname={nickname or '전체'}")
+    return Response(content=content, media_type="text/csv; charset=utf-8", headers=headers)
+
+
+@app.get("/admin/conversations.json")
+async def view_conversations(
+    source: str = "history",
+    nickname: Optional[str] = None,
+    limit: int = 1000,
+    _=Depends(require_admin_password),
+    store=Depends(get_store),
+):
+    """대화 기록을 표(컬럼) 형태로 조회 (관리자 전용 — 웹 미리보기용).
+
+    CSV 다운로드와 동일 데이터를 JSON 테이블로 반환한다.
+    - columns: 헤더 목록, rows: 행별 값 배열(컬럼 순서 일치).
+    - limit > 0 이면 최근 limit개 행만 반환(total로 전체 개수 안내).
+    """
+    if source == "logs":
+        records = await store.fetch_conversation_log_rows(nickname)
+        fields = store.CONVERSATION_LOG_FIELDS
+    else:
+        records = await store.fetch_chat_history_rows(nickname)
+        fields = store.CHAT_HISTORY_FIELDS
+
+    total = len(records)
+    if limit and limit > 0:
+        records = records[-limit:]  # 최근 N행 (오래된→최신 정렬이므로 뒤쪽이 최신)
+    table = [[r.get(f, "") for f in fields] for r in records]
+    logger.info(f"👁️ 관리자 표 조회 | source={source} | total={total} | shown={len(table)}")
+    return {"source": source, "columns": fields, "rows": table, "total": total, "shown": len(table)}
 
 
 @app.post("/medication/record")

@@ -4,7 +4,10 @@ Render 배포용
 """
 
 import os
+import re
+import tempfile
 import httpx
+import pandas as pd
 import gradio as gr
 from datetime import datetime
 from typing import Optional
@@ -148,6 +151,93 @@ async def delete_conversation_history(nickname: str) -> str:
         except httpx.HTTPError as e:
             print(f"❌ 대화 기록 삭제 에러: {e}")
             return f"❌ 삭제 실패: {str(e)}"
+
+
+# ==========================================
+# 관리자 — 대화 기록 CSV 다운로드 (교수/연구자용)
+# ==========================================
+
+async def admin_login(password: str):
+    """관리자 비밀번호 검증. 성공 시 다운로드 영역을 노출한다."""
+    if not password or not password.strip():
+        return "비밀번호를 입력해주세요.", gr.update(visible=False), ""
+    headers = {"ngrok-skip-browser-warning": "true", "X-Admin-Password": password}
+    async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+        try:
+            resp = await client.post(f"{BACKEND_URL}/admin/login")
+            if resp.status_code == 200:
+                return "✅ 로그인 성공. 아래에서 대화 기록을 다운로드하세요.", gr.update(visible=True), password
+            if resp.status_code == 401:
+                return "❌ 비밀번호가 올바르지 않습니다.", gr.update(visible=False), ""
+            return f"❌ 로그인 실패 (status {resp.status_code})", gr.update(visible=False), ""
+        except httpx.HTTPError as e:
+            print(f"❌ 관리자 로그인 에러: {e}")
+            return f"❌ 서버 연결 실패: {e}", gr.update(visible=False), ""
+
+
+async def admin_download_csv(password: str, source_label: str):
+    """대화 기록 CSV를 받아 임시파일로 저장하고 다운로드용 파일로 노출한다."""
+    if not password:
+        return None, "먼저 로그인해주세요."
+    source = "logs" if "분석" in (source_label or "") else "history"
+    headers = {"ngrok-skip-browser-warning": "true", "X-Admin-Password": password}
+    async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+        try:
+            resp = await client.get(
+                f"{BACKEND_URL}/admin/conversations.csv",
+                params={"source": source},
+            )
+            if resp.status_code == 401:
+                return None, "❌ 인증이 만료되었습니다. 다시 로그인해주세요."
+            resp.raise_for_status()
+
+            cd = resp.headers.get("content-disposition", "")
+            m = re.search(r'filename="?([^"]+)"?', cd)
+            fname = m.group(1) if m else f"conversations_{source}.csv"
+
+            tmp_dir = tempfile.mkdtemp()
+            path = os.path.join(tmp_dir, fname)
+            with open(path, "wb") as f:
+                f.write(resp.content)
+
+            # CSV 행 수(헤더 제외) 대략 표기
+            line_count = max(resp.content.count(b"\n") - 1, 0)
+            return path, f"✅ {fname} 준비 완료 (약 {line_count}행)"
+        except httpx.HTTPError as e:
+            print(f"❌ 관리자 CSV 다운로드 에러: {e}")
+            return None, f"❌ 다운로드 실패: {e}"
+
+
+async def admin_view_table(password: str, source_label: str):
+    """대화 기록을 웹에서 표(컬럼) 형태로 조회한다."""
+    if not password:
+        return pd.DataFrame(), "먼저 로그인해주세요."
+    source = "logs" if "분석" in (source_label or "") else "history"
+    headers = {"ngrok-skip-browser-warning": "true", "X-Admin-Password": password}
+    async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+        try:
+            resp = await client.get(
+                f"{BACKEND_URL}/admin/conversations.json",
+                params={"source": source},
+            )
+            if resp.status_code == 401:
+                return pd.DataFrame(), "❌ 인증이 만료되었습니다. 다시 로그인해주세요."
+            resp.raise_for_status()
+            data = resp.json()
+            cols = data.get("columns", [])
+            rows = data.get("rows", [])
+            df = pd.DataFrame(rows, columns=cols) if cols else pd.DataFrame()
+            total, shown = data.get("total", 0), data.get("shown", 0)
+            if total == 0:
+                msg = "표시할 대화 기록이 없습니다."
+                if source == "logs":
+                    msg += " (분석 로그는 백엔드 재시작 이후 쌓인 대화부터 기록됩니다.)"
+                return df, msg
+            note = f"총 {total}행 중 최근 {shown}행 표시" if shown < total else f"총 {total}행 표시"
+            return df, f"✅ {note}"
+        except httpx.HTTPError as e:
+            print(f"❌ 관리자 표 조회 에러: {e}")
+            return pd.DataFrame(), f"❌ 조회 실패: {e}"
 
 
 async def get_greeting(nickname: str) -> str:
@@ -487,7 +577,47 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
                 outputs=[profile_conditions, profile_notes],
                 api_name=False
             )
-    
+
+        # 관리자 탭 (교수/연구자용 — 대화 기록 CSV 다운로드)
+        with gr.TabItem("🔐 관리자"):
+            gr.Markdown(
+                """
+                ### 🔐 관리자 — 대화 기록 다운로드
+                연구 책임자/교수용 화면입니다. 비밀번호로 로그인한 뒤 전체 대화 기록을 CSV로 받을 수 있습니다.
+                """,
+                elem_classes=["info-box"]
+            )
+            admin_pw = gr.Textbox(
+                label="관리자 비밀번호",
+                type="password",
+                placeholder="비밀번호를 입력하세요"
+            )
+            admin_login_btn = gr.Button("로그인", variant="primary")
+            admin_status = gr.Markdown()
+
+            # 로그인 성공 시에만 노출되는 조회/다운로드 영역
+            with gr.Column(visible=False) as admin_panel:
+                admin_source = gr.Radio(
+                    choices=[
+                        "전체 대화 기록 (chat_history)",
+                        "분석 로그 — 메타데이터 포함 (conversation_logs)",
+                    ],
+                    value="전체 대화 기록 (chat_history)",
+                    label="데이터 종류"
+                )
+                with gr.Row():
+                    admin_view_btn = gr.Button("👁️ 웹에서 표로 보기", variant="secondary")
+                    admin_download_btn = gr.Button("📥 CSV 다운로드", variant="primary")
+                admin_result_msg = gr.Markdown()
+                admin_table = gr.Dataframe(
+                    label="대화 미리보기",
+                    interactive=False,
+                    wrap=True
+                )
+                admin_file = gr.File(label="다운로드 파일")
+
+            admin_pw_state = gr.State("")
+
     # 이벤트 핸들러
     # 상태 변수 (닉네임 잠금 여부)
     nickname_locked = gr.State(False)
@@ -624,6 +754,32 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇") as demo:
         fn=delete_conversation_history,
         inputs=[nickname_input],
         outputs=[profile_status],
+        api_name=False
+    )
+
+    # 관리자 탭 이벤트
+    admin_login_btn.click(
+        fn=admin_login,
+        inputs=[admin_pw],
+        outputs=[admin_status, admin_panel, admin_pw_state],
+        api_name=False
+    )
+    admin_pw.submit(
+        fn=admin_login,
+        inputs=[admin_pw],
+        outputs=[admin_status, admin_panel, admin_pw_state],
+        api_name=False
+    )
+    admin_view_btn.click(
+        fn=admin_view_table,
+        inputs=[admin_pw_state, admin_source],
+        outputs=[admin_table, admin_result_msg],
+        api_name=False
+    )
+    admin_download_btn.click(
+        fn=admin_download_csv,
+        inputs=[admin_pw_state, admin_source],
+        outputs=[admin_file, admin_result_msg],
         api_name=False
     )
 

@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     # 관리자 API 키 (문서 추가/삭제 등 관리용 엔드포인트 보호)
     ADMIN_API_KEY: Optional[str] = None
 
+    # 관리자 로그인 비밀번호 (대화 기록 CSV 다운로드 등 교수/연구자용 관리 화면 보호)
+    # ADMIN_API_KEY와 별개 — 프론트 관리자 탭에서 입력받아 검증한다.
+    ADMIN_PASSWORD: Optional[str] = None
+
     # Bareun 형태소 분석기 API 키
     BAREUN_API_KEY: Optional[str] = None
 

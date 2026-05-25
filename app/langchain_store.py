@@ -40,6 +40,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import settings
 from app.logger import get_logger
+from app.utils.timezone import get_kst_now, KST
 
 logger = get_logger(__name__)
 
@@ -168,6 +169,23 @@ class LangChainDataStore:
             await self.init_pool()
         async with self._pool.acquire() as conn:
             yield conn
+
+    async def ensure_analytics_schema(self) -> bool:
+        """연구·분석용 conversation_logs 테이블을 보장한다 (idempotent).
+
+        기존 INIT_SCHEMA_SQL은 CREATE EXTENSION 등 권한이 필요한 구문을 포함해
+        한 트랜잭션에서 실패하면 전체가 롤백될 수 있다. 분석 테이블은 그와 무관하게
+        항상 생성되도록 startup에서 이 메서드를 따로 호출한다."""
+        if not self._use_postgres:
+            return False
+        try:
+            async with self.get_connection() as conn:
+                await conn.execute(CONVERSATION_LOGS_SCHEMA_SQL)
+            logger.info("conversation_logs 분석 테이블 준비 완료")
+            return True
+        except Exception as e:
+            logger.error(f"분석 스키마 초기화 오류: {e}")
+            return False
     
     # ==========================================
     # 문서 벡터 검색 (RAG)
@@ -269,7 +287,154 @@ class LangChainDataStore:
             logger.debug(f"대화 저장: {nickname}")
         except Exception as e:
             logger.error(f"대화 저장 오류: {e}")
-    
+
+    async def save_conversation_log(
+        self,
+        nickname: str,
+        user_msg: str,
+        ai_msg: str,
+        metadata: Optional[dict] = None,
+    ) -> bool:
+        """연구·분석용 턴 단위 대화 로그 저장.
+
+        chat_history(LangChain)는 런타임 대화 맥락 복원에 쓰이고 타임스탬프·메타데이터가
+        없어 사후 분석이 어렵다. 이 테이블은 KST 타임스탬프와 인텐트/위험도/증상 같은
+        파이프라인 산출 메타데이터를 턴마다 함께 남겨 이용자 그룹 분석을 가능하게 한다.
+        chat_history와 독립적이므로 한쪽이 실패해도 다른 쪽 저장에는 영향을 주지 않는다.
+        """
+        if not self._use_postgres:
+            return False
+
+        meta = metadata or {}
+        import json as _json
+        try:
+            async with self.get_connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO conversation_logs (
+                        nickname, user_message, ai_message,
+                        intent, intent_confidence, risk_level,
+                        detected_symptoms, risk_categories,
+                        repeated_question, topic_drifted,
+                        created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    """,
+                    nickname,
+                    user_msg,
+                    ai_msg,
+                    meta.get("intent"),
+                    meta.get("intent_confidence"),
+                    meta.get("risk_level"),
+                    _json.dumps(meta.get("detected_symptoms", []), ensure_ascii=False),
+                    _json.dumps(meta.get("risk_categories", []), ensure_ascii=False),
+                    bool(meta.get("repeated_question", False)),
+                    bool(meta.get("topic_drifted", False)),
+                    get_kst_now(),
+                )
+            logger.debug(f"대화 로그 저장: {nickname} | intent={meta.get('intent')}")
+            return True
+        except Exception as e:
+            logger.error(f"대화 로그 저장 오류: {e}")
+            return False
+
+    # ==========================================
+    # 대화 기록 추출 (관리자 CSV 다운로드 / 분석용)
+    # ==========================================
+
+    # CSV 컬럼 순서 (엔드포인트·스크립트가 공유)
+    CHAT_HISTORY_FIELDS = ["id", "nickname", "role", "content"]
+    CONVERSATION_LOG_FIELDS = [
+        "id", "nickname", "created_at_kst", "intent", "intent_confidence",
+        "risk_level", "detected_symptoms", "risk_categories",
+        "repeated_question", "topic_drifted", "user_message", "ai_message",
+    ]
+
+    async def _table_exists(self, conn, table: str) -> bool:
+        return bool(await conn.fetchval("SELECT to_regclass($1)", table))
+
+    async def fetch_chat_history_rows(self, nickname: Optional[str] = None) -> list[dict]:
+        """레거시 chat_history(LangChain JSONB)를 행 단위로 복원한다.
+
+        타임스탬프·메타데이터는 없지만 모든 런타임 대화를 포함한다."""
+        if not self._use_postgres:
+            return []
+        import json as _json
+        rows_out: list[dict] = []
+        try:
+            async with self.get_connection() as conn:
+                if not await self._table_exists(conn, "chat_history"):
+                    return []
+                where = "WHERE session_id = $1" if nickname else ""
+                args = [nickname] if nickname else []
+                rows = await conn.fetch(
+                    f"SELECT id, session_id, message FROM chat_history {where} ORDER BY id ASC",
+                    *args,
+                )
+            for r in rows:
+                msg = r["message"]
+                if isinstance(msg, str):
+                    try:
+                        msg = _json.loads(msg)
+                    except _json.JSONDecodeError:
+                        msg = {}
+                mtype = (msg or {}).get("type", "")
+                content = ((msg or {}).get("data") or {}).get("content", "")
+                rows_out.append({
+                    "id": r["id"],
+                    "nickname": r["session_id"],
+                    "role": "user" if mtype == "human" else ("assistant" if mtype == "ai" else mtype),
+                    "content": (content or "").replace("\r", " ").strip(),
+                })
+        except Exception as e:
+            logger.error(f"chat_history 추출 오류: {e}")
+        return rows_out
+
+    async def fetch_conversation_log_rows(self, nickname: Optional[str] = None) -> list[dict]:
+        """conversation_logs(타임스탬프 + 메타데이터)를 행 단위로 반환한다."""
+        if not self._use_postgres:
+            return []
+        rows_out: list[dict] = []
+        try:
+            async with self.get_connection() as conn:
+                if not await self._table_exists(conn, "conversation_logs"):
+                    return []
+                where = "WHERE nickname = $1" if nickname else ""
+                args = [nickname] if nickname else []
+                rows = await conn.fetch(
+                    f"""
+                    SELECT id, nickname, user_message, ai_message,
+                           intent, intent_confidence, risk_level,
+                           detected_symptoms, risk_categories,
+                           repeated_question, topic_drifted, created_at
+                    FROM conversation_logs
+                    {where}
+                    ORDER BY created_at ASC, id ASC
+                    """,
+                    *args,
+                )
+            for r in rows:
+                created = r["created_at"]
+                created_kst = (
+                    created.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S") if created else ""
+                )
+                rows_out.append({
+                    "id": r["id"],
+                    "nickname": r["nickname"],
+                    "created_at_kst": created_kst,
+                    "intent": r["intent"] or "",
+                    "intent_confidence": r["intent_confidence"] if r["intent_confidence"] is not None else "",
+                    "risk_level": r["risk_level"] or "",
+                    "detected_symptoms": r["detected_symptoms"] or "[]",
+                    "risk_categories": r["risk_categories"] or "[]",
+                    "repeated_question": r["repeated_question"],
+                    "topic_drifted": r["topic_drifted"],
+                    "user_message": (r["user_message"] or "").replace("\r", " ").strip(),
+                    "ai_message": (r["ai_message"] or "").replace("\r", " ").strip(),
+                })
+        except Exception as e:
+            logger.error(f"conversation_logs 추출 오류: {e}")
+        return rows_out
+
     def get_recent_conversations(self, nickname: str, limit: int = 10) -> list[dict]:
         """최근 대화 조회"""
         if not self._use_postgres:
@@ -497,6 +662,32 @@ class LangChainDataStore:
 # DB 스키마 초기화 (최초 1회)
 # ==========================================
 
+# 연구·분석용 대화 로그 스키마 (독립 실행 가능 — CREATE EXTENSION 등 권한 이슈와 분리)
+# chat_history(LangChain 자동생성)는 타임스탬프·메타데이터가 없어 사후 분석이 어려우므로
+# 턴 단위로 KST 타임스탬프 + 파이프라인 산출 메타데이터를 함께 남긴다.
+CONVERSATION_LOGS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS conversation_logs (
+    id BIGSERIAL PRIMARY KEY,
+    nickname VARCHAR(100) NOT NULL,
+    user_message TEXT,
+    ai_message TEXT,
+    intent VARCHAR(50),
+    intent_confidence REAL,
+    risk_level VARCHAR(20),
+    detected_symptoms JSONB,
+    risk_categories JSONB,
+    repeated_question BOOLEAN DEFAULT FALSE,
+    topic_drifted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 분석 쿼리용 인덱스 (이용자별 / 시간순 / 인텐트별 집계)
+CREATE INDEX IF NOT EXISTS idx_conv_logs_nickname ON conversation_logs(nickname);
+CREATE INDEX IF NOT EXISTS idx_conv_logs_created ON conversation_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_conv_logs_intent ON conversation_logs(intent);
+"""
+
+
 INIT_SCHEMA_SQL = """
 -- pgvector 확장 (Cloud SQL에서 수동 실행 필요할 수 있음)
 CREATE EXTENSION IF NOT EXISTS vector;
@@ -527,7 +718,7 @@ CREATE TABLE IF NOT EXISTS conversation_summaries (
 
 -- 요약 인덱스
 CREATE INDEX IF NOT EXISTS idx_summaries_updated ON conversation_summaries(updated_at DESC);
-
+""" + CONVERSATION_LOGS_SCHEMA_SQL + """
 -- chat_history 테이블은 LangChain이 자동 생성
 -- langchain_pg_embedding 테이블도 LangChain이 자동 생성
 """

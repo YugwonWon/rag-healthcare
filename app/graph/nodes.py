@@ -327,8 +327,14 @@ async def generate_response_node(state: ConversationState) -> dict:
 # 노드 7: 대화 저장
 # ============================================================
 
-def save_conversation_node(state: ConversationState) -> dict:
-    """대화 기록을 저장한다."""
+async def save_conversation_node(state: ConversationState) -> dict:
+    """대화 기록을 저장한다.
+
+    두 곳에 독립적으로 저장한다:
+    - chat_history(LangChain): 런타임 멀티턴 맥락 복원용 (기존 동작 유지)
+    - conversation_logs: KST 타임스탬프 + 인텐트/위험도/증상 메타데이터를 남기는
+      연구·분석용 로그. 한쪽이 실패해도 다른 쪽 저장에는 영향을 주지 않는다.
+    """
     nickname = state["nickname"]
     message = state["message"]
     response = state.get("response", "")
@@ -337,19 +343,33 @@ def save_conversation_node(state: ConversationState) -> dict:
 
     metadata = {
         "intent": intent.value if isinstance(intent, Intent) else str(intent),
-        "health_terms": health_analysis.get("detected_health_terms", [])[:5],
+        "intent_confidence": state.get("intent_confidence"),
         "risk_level": state.get("risk_level", "low"),
+        "detected_symptoms": state.get(
+            "detected_symptoms",
+            health_analysis.get("detected_health_terms", []),
+        ),
         "risk_categories": [
             r["category"] for r in health_analysis.get("risk_categories", [])
         ],
+        "repeated_question": state.get("repeated_question", False),
+        "topic_drifted": state.get("topic_drifted", False),
     }
 
+    store = get_langchain_store()
+
+    # 1) 런타임 맥락용 chat_history (기존 동작)
     try:
-        store = get_langchain_store()
         store.save_conversation(nickname, message, response)
-        logger.debug(f"💾 대화 저장 완료 | nickname={nickname}")
     except Exception as e:
-        logger.error(f"대화 저장 오류: {e}")
+        logger.error(f"대화 저장 오류(chat_history): {e}")
+
+    # 2) 연구·분석용 로그 (타임스탬프 + 메타데이터)
+    try:
+        await store.save_conversation_log(nickname, message, response, metadata)
+        logger.debug(f"💾 대화 저장 완료 | nickname={nickname} | intent={metadata['intent']}")
+    except Exception as e:
+        logger.error(f"대화 저장 오류(conversation_logs): {e}")
 
     return {}
 
