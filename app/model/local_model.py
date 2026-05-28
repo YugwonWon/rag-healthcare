@@ -100,6 +100,12 @@ class OllamaClient:
                 "repeat_penalty": 1.3,  # 반복 방지 (파인튜닝 모델 과적합 보완)
                 "top_p": 0.9,
                 "top_k": 40,
+                # ChatML/특수 토큰 새는 것 방지 — 2.1B 모델이 <|im_end|>·<|email_address|>
+                # 등을 뱉고도 계속 생성하던 문제 차단.
+                "stop": [
+                    "<|im_end|>", "<|im_start|>", "<|endoftext|>",
+                    "<|email_address|>", "<|im_email-end|>", "</s>",
+                ],
             }
         }
         
@@ -137,7 +143,11 @@ class OllamaClient:
         
         # 2) <tool_call> 등 hallucinated 태그 제거
         content = re.sub(r"</?tool_call[^>]*>", "", content)
-        
+
+        # 2b) ChatML·특수 토큰 잔재 정리 — <|im_end|>, <|email_address|>, </|im_end|> 등.
+        #     stop 시퀀스가 1차 차단하지만 그래도 새는 경우의 2차 안전망.
+        content = re.sub(r"</?\|[^|<>]*\|>", "", content)
+
         # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
         content = content.strip()
         content = re.sub(r"^\[[-\d]*\]\s*", "", content)  # [-1] 등

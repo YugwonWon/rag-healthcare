@@ -331,16 +331,13 @@ class HealthcarePrompts:
 
     @classmethod
     def build_style_addendum(cls, intent_value: str) -> str:
-        """인텐트별 예시 1개 + 변주 지침 1개를 무작위로 골라 다양성 지침을 만든다."""
-        parts = []
-        examples = cls.STYLE_EXAMPLES.get(intent_value, [])
-        if examples:
-            picked = random.choice(examples)
-            parts.append(
-                f'표현 참고(그대로 베끼지 말고 어휘·말투를 새롭게 바꿀 것): "{picked}"'
-            )
-        parts.append(random.choice(cls.STYLE_DIRECTIVES))
-        return "\n[다양성] " + " ".join(parts)
+        """변주 지침만 무작위 회전한다.
+
+        이전엔 예시 문장도 같이 주입했는데, 2.1B 모델이 그 예시를 그대로 베끼는
+        경향이 있어(예: "오늘 날씨가 참 포근하네요" 그대로 출력) 제거했다.
+        STYLE_EXAMPLES 상수는 향후 다른 활용(파인튜닝 데이터 등)을 위해 남겨둔다.
+        intent_value는 호환을 위해 시그니처에 유지(현재 미사용)."""
+        return "\n[다양성] " + random.choice(cls.STYLE_DIRECTIVES)
 
     GREETING_TEMPLATE = """안녕하세요, {nickname}님! {personalized_greeting}"""
     
