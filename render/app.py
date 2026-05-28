@@ -558,12 +558,25 @@ HANDSFREE_INIT_JS = """
     if (el) { const t = el.querySelector('p, span, .prose'); (t || el).textContent = msg; }
   };
   window.__hfHookReply = () => {
-    const a = document.querySelector('#voice_reply audio');
-    if (a && !a.__hfHooked) {
+    if (window.__hfObsSetup) return;
+    window.__hfObsSetup = true;
+    const hook = (a) => {
+      if (!a || a.__hfHooked) return;
       a.__hfHooked = true;
-      a.addEventListener('play', () => { if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (e) {} } });
-      a.addEventListener('ended', () => { if (window.__hfActive && window.__hfVAD) { try { window.__hfVAD.start(); window.__hfStatus('🎧 듣는 중…'); } catch (e) {} } });
-    }
+      a.addEventListener('play', () => {
+        if (window.__hfVAD) { try { window.__hfVAD.pause(); window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)'); } catch (e) {} }
+      });
+      a.addEventListener('ended', () => {
+        if (window.__hfActive && window.__hfVAD) {
+          try { window.__hfVAD.start(); window.__hfStatus('🎧 듣는 중…'); } catch (e) {}
+        }
+      });
+    };
+    hook(document.querySelector('#voice_reply audio'));
+    // Gradio가 audio 엘리먼트를 교체해도 새것을 자동 후킹
+    const target = document.querySelector('#voice_reply') || document.body;
+    new MutationObserver(() => hook(document.querySelector('#voice_reply audio')))
+      .observe(target, { childList: true, subtree: true });
   };
   window.hfToggle = async () => {
     try {

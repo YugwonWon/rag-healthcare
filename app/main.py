@@ -427,7 +427,7 @@ async def speech_to_text(
             pass
 
 
-def _truncate_for_tts(text: str, max_chars: int = 300) -> str:
+def _truncate_for_tts(text: str, max_chars: int = 200) -> str:
     """음성 답변은 짧아야 듣기 좋고 TTS도 안정적(긴 입력은 melo가 실패하기도 함).
     max_chars 초과 시 문장 경계에서 자른다. (대화창 텍스트는 전체가 그대로 표시됨)"""
     text = (text or "").strip()
