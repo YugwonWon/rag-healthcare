@@ -596,8 +596,12 @@ HANDSFREE_INIT_JS = """
     if (el) { const t = el.querySelector('p, span, .prose'); (t || el).textContent = msg; }
   };
   // 답변 재생 종료 (또는 교체/제거) 시 마이크를 다시 켜고 상태를 정리.
-  // 어떤 이벤트(ended/pause/emptied/엘리먼트 제거)가 트리거해도 동일하게 동작한다.
+  // 어떤 이벤트(ended/pause/emptied/엘리먼트 제거/safety타이머)가 트리거해도 동일하게 동작한다.
   window.__hfResetAfterPlayback = () => {
+    if (window.__hfStatusFailsafe) {
+      clearTimeout(window.__hfStatusFailsafe);
+      window.__hfStatusFailsafe = null;
+    }
     if (window.__hfActive && window.__hfVAD) {
       try { window.__hfVAD.start(); } catch (e) {}
       window.__hfStatus('🎧 듣는 중…');
@@ -626,28 +630,34 @@ HANDSFREE_INIT_JS = """
         }
       });
       a.addEventListener('emptied', window.__hfResetAfterPlayback);
-      // 최후 안전망: 60초가 지나도 ended가 안 떠 있으면 강제로 풀어준다.
-      setTimeout(() => {
-        if (!a.ended && a.parentNode) {
-          console.warn('[hf] 60s safety timer — forcing status reset');
+      // timeupdate 기반 종료 감지 — 일부 브라우저에서 ended 이벤트가 누락되는 경우 대비.
+      a.addEventListener('timeupdate', () => {
+        if (a.duration > 0 && a.currentTime >= a.duration - 0.1) {
+          window.__hfResetAfterPlayback();
         }
-        window.__hfResetAfterPlayback();
-      }, 60000);
+      });
     };
     hook(document.querySelector('#voice_reply audio'));
-    // Gradio가 audio 엘리먼트를 교체/제거해도 새것을 자동 후킹 + 제거 감지 시 상태 정리.
+    // Gradio가 audio 엘리먼트를 교체/제거하거나 src만 갈아 끼워도 상태가 굳지 않게 자동 후킹/감지.
     const target = document.querySelector('#voice_reply') || document.body;
     new MutationObserver((muts) => {
       let removed = false;
+      let srcChanged = false;
       for (const m of muts) {
         for (const node of (m.removedNodes || [])) {
           if (node && node.tagName === 'AUDIO') { removed = true; break; }
         }
-        if (removed) break;
+        if (m.type === 'attributes' && m.attributeName === 'src' && m.target && m.target.tagName === 'AUDIO') {
+          srcChanged = true;
+        }
       }
       hook(document.querySelector('#voice_reply audio'));
+      if (srcChanged && window.__hfVAD) {
+        try { window.__hfVAD.pause(); } catch (e) {}
+        window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
+      }
       if (removed) window.__hfResetAfterPlayback();
-    }).observe(target, { childList: true, subtree: true });
+    }).observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
   };
   window.hfToggle = async () => {
     try {
@@ -687,6 +697,13 @@ HANDSFREE_INIT_JS = """
             // 응답 오디오 'ended' 이벤트에서 다시 start() 한다.
             if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (e) {} }
             window.__hfStatus('⏳ 처리 중…');
+            // 마지막 안전망 — 매 발화마다 fresh 60s 타이머. 어떤 이유로든
+            // ended/timeupdate/pause 가 트리거되지 않아 상태가 굳으면 자동 풀어준다.
+            if (window.__hfStatusFailsafe) clearTimeout(window.__hfStatusFailsafe);
+            window.__hfStatusFailsafe = setTimeout(() => {
+              console.warn('[hf] 60s 안전 타이머 — 상태 강제 복구');
+              window.__hfResetAfterPlayback();
+            }, 60000);
             const b64 = encodeWAV(audio, 16000);
             const el = document.querySelector('#vad_b64 textarea') || document.querySelector('#vad_b64 input');
             if (el) {
