@@ -383,14 +383,36 @@ async def voice_chat_fn(nickname: str, audio_path, history: list):
     return history, tts_path, None
 
 
+_last_b64_hash: Optional[str] = None
+_last_b64_at: float = 0.0
+
+
 async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
     """핸즈프리(브라우저 VAD)가 보낸 base64 WAV 입구."""
+    global _last_b64_hash, _last_b64_at
+    import hashlib
+    import time as _time
+
+    # 빈 입력은 출력 리셋으로 인한 spurious 재호출 — 어떤 컴포넌트도 건드리지 않는다.
+    # (특히 voice_reply 를 None 으로 덮으면 autoplay audio가 재-render되어 처음부터 다시 재생된다)
     if not audio_b64:
-        return history or [], None, ""
+        return gr.update(), gr.update(), gr.update()
+
+    # JS가 textarea 값 setter 와 input 이벤트를 동시에 발생시키면 Gradio .change 가
+    # 같은 b64로 두 번 발화하는 경우가 있음 → 같은 오디오를 짧은 시간 내 또 받으면
+    # 두 번째 /voice-chat 으로 새 응답·새 TTS 가 생성되어 사용자에겐 "TTS 두 번 재생"으로 보인다.
+    h = hashlib.md5(audio_b64.encode("utf-8")).hexdigest()
+    now = _time.time()
+    if h == _last_b64_hash and (now - _last_b64_at) < 30:
+        print(f"⏭️ 중복 audio_b64 무시 (hash={h[:8]} dt={now - _last_b64_at:.1f}s)")
+        return gr.update(), gr.update(), gr.update()
+    _last_b64_hash = h
+    _last_b64_at = now
+
     if not nickname or not nickname.strip():
         history = history or []
         history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
-        return history, None, ""
+        return history, gr.update(), gr.update()
     import base64
     raw = base64.b64decode(audio_b64.split(",")[-1])
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
@@ -403,7 +425,9 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
             os.remove(path)
         except OSError:
             pass
-    return history, tts_path, ""  # 마지막 ""로 hidden textbox 초기화
+    # vad_b64는 gr.update() 로 둬서 다음 b64가 들어올 때만 .change 가 발화하게 한다.
+    # ""로 강제 reset 하면 그 자체가 change 를 발화시켜 voice_reply 가 한 번 더 재-render → 재생 2회.
+    return history, tts_path, gr.update()
 
 
 async def on_nickname_submit(nickname: str) -> tuple[str, str]:
