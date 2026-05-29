@@ -568,6 +568,9 @@ HANDSFREE_INIT_JS = """
     const hook = (a) => {
       if (!a || a.__hfHooked) return;
       a.__hfHooked = true;
+      // 새 오디오가 등장한 시점에 이미 autoplay 가 시작되어
+      // 'play' 리스너를 놓치는 경합을 막기 위해 즉시 VAD를 멈춘다.
+      if (window.__hfVAD) { try { window.__hfVAD.pause(); window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)'); } catch (e) {} }
       a.addEventListener('play', () => {
         if (window.__hfVAD) { try { window.__hfVAD.pause(); window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)'); } catch (e) {} }
       });
@@ -608,6 +611,10 @@ HANDSFREE_INIT_JS = """
           onVADMisfire: () => { console.log('[VAD] misfire(너무 짧음)'); window.__hfStatus('🎧 듣는 중… (조금 더 또렷이 말씀해 주세요)'); },
           onSpeechEnd: (audio) => {
             console.log('[VAD] speech end, samples=', audio && audio.length);
+            // 발화 종료 즉시 VAD를 멈춘다. 답변 TTS가 마이크로 되돌아 들어와
+            // 봇이 자기 목소리에 응답하는 '셀프 에코 루프'를 차단.
+            // 응답 오디오 'ended' 이벤트에서 다시 start() 한다.
+            if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (e) {} }
             window.__hfStatus('⏳ 처리 중…');
             const b64 = encodeWAV(audio, 16000);
             const el = document.querySelector('#vad_b64 textarea') || document.querySelector('#vad_b64 input');
