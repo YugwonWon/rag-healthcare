@@ -385,11 +385,13 @@ async def voice_chat_fn(nickname: str, audio_path, history: list):
 
 _last_b64_hash: Optional[str] = None
 _last_b64_at: float = 0.0
+_voice_lock: Optional["asyncio.Lock"] = None
 
 
 async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
     """핸즈프리(브라우저 VAD)가 보낸 base64 WAV 입구."""
-    global _last_b64_hash, _last_b64_at
+    global _last_b64_hash, _last_b64_at, _voice_lock
+    import asyncio
     import hashlib
     import time as _time
 
@@ -398,16 +400,23 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
     if not audio_b64:
         return gr.update(), gr.update(), gr.update()
 
-    # JS가 textarea 값 setter 와 input 이벤트를 동시에 발생시키면 Gradio .change 가
-    # 같은 b64로 두 번 발화하는 경우가 있음 → 같은 오디오를 짧은 시간 내 또 받으면
-    # 두 번째 /voice-chat 으로 새 응답·새 TTS 가 생성되어 사용자에겐 "TTS 두 번 재생"으로 보인다.
-    h = hashlib.md5(audio_b64.encode("utf-8")).hexdigest()
-    now = _time.time()
-    if h == _last_b64_hash and (now - _last_b64_at) < 30:
-        print(f"⏭️ 중복 audio_b64 무시 (hash={h[:8]} dt={now - _last_b64_at:.1f}s)")
-        return gr.update(), gr.update(), gr.update()
-    _last_b64_hash = h
-    _last_b64_at = now
+    # Lock 으로 dedupe 윈도우의 race 를 없앤다 (Gradio queue가 같은 이벤트를 동시에 두 번 보낼 때 보호).
+    if _voice_lock is None:
+        _voice_lock = asyncio.Lock()
+    async with _voice_lock:
+        h = hashlib.md5(audio_b64.encode("utf-8")).hexdigest()
+        now = _time.time()
+        # (a) 같은 b64 가 30초 안에 또 들어오면 같은 발화의 중복 — 무시
+        if h == _last_b64_hash and (now - _last_b64_at) < 30:
+            print(f"⏭️ 중복 audio_b64 무시 — same hash (h={h[:8]} dt={now - _last_b64_at:.1f}s)")
+            return gr.update(), gr.update(), gr.update()
+        # (b) 직전 처리 후 5초 안에 어떤 audio_b64든 또 들어오면 너무 빠른 재진입 — 무시
+        #     (VAD가 한 발화를 두 segment로 잘라 보내는 케이스, 또는 .change 이중 발화)
+        if (now - _last_b64_at) < 5:
+            print(f"⏭️ 5초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
+            return gr.update(), gr.update(), gr.update()
+        _last_b64_hash = h
+        _last_b64_at = now
 
     if not nickname or not nickname.strip():
         history = history or []
@@ -581,6 +590,17 @@ HANDSFREE_INIT_JS = """
     const el = document.querySelector('#handsfree_status');
     if (el) { const t = el.querySelector('p, span, .prose'); (t || el).textContent = msg; }
   };
+  // 답변 재생 종료 (또는 교체/제거) 시 마이크를 다시 켜고 상태를 정리.
+  // 어떤 이벤트(ended/pause/emptied/엘리먼트 제거)가 트리거해도 동일하게 동작한다.
+  window.__hfResetAfterPlayback = () => {
+    if (window.__hfActive && window.__hfVAD) {
+      try { window.__hfVAD.start(); } catch (e) {}
+      window.__hfStatus('🎧 듣는 중…');
+    } else if (!window.__hfActive) {
+      window.__hfStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
+    }
+  };
+
   window.__hfHookReply = () => {
     if (window.__hfObsSetup) return;
     window.__hfObsSetup = true;
@@ -593,17 +613,36 @@ HANDSFREE_INIT_JS = """
       a.addEventListener('play', () => {
         if (window.__hfVAD) { try { window.__hfVAD.pause(); window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)'); } catch (e) {} }
       });
-      a.addEventListener('ended', () => {
-        if (window.__hfActive && window.__hfVAD) {
-          try { window.__hfVAD.start(); window.__hfStatus('🎧 듣는 중…'); } catch (e) {}
+      a.addEventListener('ended', window.__hfResetAfterPlayback);
+      // 외부 요인(교체/오류 등)으로 재생이 멈춰도 상태가 굳지 않게 안전망.
+      a.addEventListener('pause', () => {
+        if (a.ended || a.currentTime >= a.duration - 0.05) {
+          window.__hfResetAfterPlayback();
         }
       });
+      a.addEventListener('emptied', window.__hfResetAfterPlayback);
+      // 최후 안전망: 60초가 지나도 ended가 안 떠 있으면 강제로 풀어준다.
+      setTimeout(() => {
+        if (!a.ended && a.parentNode) {
+          console.warn('[hf] 60s safety timer — forcing status reset');
+        }
+        window.__hfResetAfterPlayback();
+      }, 60000);
     };
     hook(document.querySelector('#voice_reply audio'));
-    // Gradio가 audio 엘리먼트를 교체해도 새것을 자동 후킹
+    // Gradio가 audio 엘리먼트를 교체/제거해도 새것을 자동 후킹 + 제거 감지 시 상태 정리.
     const target = document.querySelector('#voice_reply') || document.body;
-    new MutationObserver(() => hook(document.querySelector('#voice_reply audio')))
-      .observe(target, { childList: true, subtree: true });
+    new MutationObserver((muts) => {
+      let removed = false;
+      for (const m of muts) {
+        for (const node of (m.removedNodes || [])) {
+          if (node && node.tagName === 'AUDIO') { removed = true; break; }
+        }
+        if (removed) break;
+      }
+      hook(document.querySelector('#voice_reply audio'));
+      if (removed) window.__hfResetAfterPlayback();
+    }).observe(target, { childList: true, subtree: true });
   };
   window.hfToggle = async () => {
     try {
@@ -629,6 +668,14 @@ HANDSFREE_INIT_JS = """
           onSpeechStart: () => { console.log('[VAD] speech start'); window.__hfStatus('🗣️ 말하는 중…'); },
           onVADMisfire: () => { console.log('[VAD] misfire(너무 짧음)'); window.__hfStatus('🎧 듣는 중… (조금 더 또렷이 말씀해 주세요)'); },
           onSpeechEnd: (audio) => {
+            // VAD가 한 발화를 여러 segment로 잘라 onSpeechEnd가 연속 호출되거나
+            // 응답 오디오 직후 즉시 트리거되는 경우 — 3초 내 재진입은 무시.
+            const _now = Date.now();
+            if (_now - (window.__hfLastSpeechEndAt || 0) < 3000) {
+              console.log('[VAD] 3초 내 재진입 — speech-end 무시');
+              return;
+            }
+            window.__hfLastSpeechEndAt = _now;
             console.log('[VAD] speech end, samples=', audio && audio.length);
             // 발화 종료 즉시 VAD를 멈춘다. 답변 TTS가 마이크로 되돌아 들어와
             // 봇이 자기 목소리에 응답하는 '셀프 에코 루프'를 차단.
