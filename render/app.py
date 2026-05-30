@@ -410,10 +410,11 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
         if h == _last_b64_hash and (now - _last_b64_at) < 30:
             print(f"⏭️ 중복 audio_b64 무시 — same hash (h={h[:8]} dt={now - _last_b64_at:.1f}s)")
             return gr.update(), gr.update(), gr.update()
-        # (b) 직전 처리 후 5초 안에 어떤 audio_b64든 또 들어오면 너무 빠른 재진입 — 무시
-        #     (VAD가 한 발화를 두 segment로 잘라 보내는 케이스, 또는 .change 이중 발화)
-        if (now - _last_b64_at) < 5:
-            print(f"⏭️ 5초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
+        # (b) 직전 처리 후 20초 안에 어떤 audio_b64든 또 들어오면 너무 빠른 재진입 — 무시
+        #     (응답 TTS 가 스피커→마이크 echo 로 다시 잡혀 트리거되는 self-loop 차단.
+        #      실측: 첫 응답 13.7s + TTS ~10s 후 ~17s 시점에 두 번째 호출이 들어오는 패턴 관찰됨)
+        if (now - _last_b64_at) < 20:
+            print(f"⏭️ 20초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
             return gr.update(), gr.update(), gr.update()
         _last_b64_hash = h
         _last_b64_at = now
@@ -592,17 +593,29 @@ HANDSFREE_INIT_JS = """
   };
   // 답변 재생 종료 (또는 교체/제거) 시 마이크를 다시 켜고 상태를 정리.
   // 어떤 이벤트(ended/pause/emptied/엘리먼트 제거/safety타이머)가 트리거해도 동일하게 동작한다.
+  // VAD 재개는 1.5s 지연 — 스피커 잔향이 마이크로 들어와 self-trigger 되는 것 방지.
   window.__hfResetAfterPlayback = () => {
     if (window.__hfStatusFailsafe) {
       clearTimeout(window.__hfStatusFailsafe);
       window.__hfStatusFailsafe = null;
     }
-    if (window.__hfActive && window.__hfVAD) {
-      try { window.__hfVAD.start(); } catch (e) {}
-      window.__hfStatus('🎧 듣는 중…');
-    } else if (!window.__hfActive) {
+    if (window.__hfResetPending) return;  // 이미 reset 진행 중이면 중복 안 함
+    window.__hfResetPending = true;
+    if (!window.__hfActive) {
       window.__hfStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
+      window.__hfIgnoreVAD = false;
+      window.__hfResetPending = false;
+      return;
     }
+    window.__hfStatus('🎧 듣는 중… (마이크 안정화)');
+    setTimeout(() => {
+      if (window.__hfActive && window.__hfVAD) {
+        try { window.__hfVAD.start(); } catch (e) {}
+        window.__hfStatus('🎧 듣는 중…');
+      }
+      window.__hfIgnoreVAD = false;
+      window.__hfResetPending = false;
+    }, 1500);
   };
 
   window.__hfHookReply = () => {
@@ -678,6 +691,11 @@ HANDSFREE_INIT_JS = """
           onSpeechStart: () => { console.log('[VAD] speech start'); window.__hfStatus('🗣️ 말하는 중…'); },
           onVADMisfire: () => { console.log('[VAD] misfire(너무 짧음)'); window.__hfStatus('🎧 듣는 중… (조금 더 또렷이 말씀해 주세요)'); },
           onSpeechEnd: (audio) => {
+            // 처리/재생 중에는 어떤 VAD 콜백도 무시 — pause()로 라이브러리가 안 멈춰질 때를 대비한 강한 가드.
+            if (window.__hfIgnoreVAD) {
+              console.log('[VAD] __hfIgnoreVAD 가드 — speech-end 무시');
+              return;
+            }
             // VAD가 한 발화를 여러 segment로 잘라 onSpeechEnd가 연속 호출되거나
             // 응답 오디오 직후 즉시 트리거되는 경우 — 3초 내 재진입은 무시.
             const _now = Date.now();
@@ -686,10 +704,11 @@ HANDSFREE_INIT_JS = """
               return;
             }
             window.__hfLastSpeechEndAt = _now;
+            window.__hfIgnoreVAD = true;  // 다음 reset 까지 무시
             console.log('[VAD] speech end, samples=', audio && audio.length);
             // 발화 종료 즉시 VAD를 멈춘다. 답변 TTS가 마이크로 되돌아 들어와
             // 봇이 자기 목소리에 응답하는 '셀프 에코 루프'를 차단.
-            // 응답 오디오 'ended' 이벤트에서 다시 start() 한다.
+            // 응답 오디오 'ended'/'timeupdate'/60s 안전타이머 중 하나가 트리거되면 reset.
             if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (e) {} }
             window.__hfStatus('⏳ 처리 중…');
             // 마지막 안전망 — 매 발화마다 fresh 60s 타이머. 어떤 이유로든
