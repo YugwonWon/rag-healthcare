@@ -622,9 +622,10 @@ HANDSFREE_INIT_JS = """
     if (window.__hfObsSetup) return;
     window.__hfObsSetup = true;
     // 이벤트 위임 — per-element hook 대신 document 에 capture phase로 한 번만 건다.
-    // Gradio가 audio 엘리먼트를 교체/제거/재사용 해도 같은 핸들러가 동작.
+    // Gradio가 audio 엘리먼트를 교체/제거/재사용/elem_id 컨테이너 밖에 생성 해도 모두 잡힘.
+    // 페이지에 다른 audio 소스가 없으니 #voice_reply 종속을 빼고 모든 AUDIO 를 후보로 본다.
     // 'play'/'ended'/'timeupdate' 등은 기본적으로 bubble 하지 않으니 capture(true) 필수.
-    const isVoiceReply = (el) => el && el.tagName === 'AUDIO' && el.closest && el.closest('#voice_reply');
+    const isVoiceReply = (el) => el && el.tagName === 'AUDIO';
     document.addEventListener('play', (e) => {
       if (!isVoiceReply(e.target)) return;
       if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
@@ -656,7 +657,8 @@ HANDSFREE_INIT_JS = """
     new MutationObserver((muts) => {
       for (const m of muts) {
         for (const node of (m.addedNodes || [])) {
-          if (node && node.tagName === 'AUDIO' && node.closest && node.closest('#voice_reply')) {
+          if (node && node.tagName === 'AUDIO') {
+            console.log('[hf obs] audio 엘리먼트 추가 감지');
             if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
             window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
             return;
@@ -667,9 +669,12 @@ HANDSFREE_INIT_JS = """
 
     // 폴링 fallback — 이벤트가 어떤 이유로 안 잡혀도 audio.currentTime/duration 으로
     // 재생/종료 상태를 직접 감지. 500ms 주기로 비싸지 않게 동작.
+    // #voice_reply 종속을 빼고 페이지 내 모든 AUDIO 중 src 가 있는 것을 본다.
     setInterval(() => {
-      const a = document.querySelector('#voice_reply audio');
-      if (!a || !a.src) return;
+      const audios = document.querySelectorAll('audio');
+      let a = null;
+      for (const el of audios) { if (el.src) { a = el; break; } }
+      if (!a) return;
       // 재생 시작 감지
       if (!a.paused && a.currentTime > 0 && !window.__hfPollPlaying) {
         window.__hfPollPlaying = true;
