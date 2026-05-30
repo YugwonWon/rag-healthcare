@@ -621,51 +621,49 @@ HANDSFREE_INIT_JS = """
   window.__hfHookReply = () => {
     if (window.__hfObsSetup) return;
     window.__hfObsSetup = true;
-    const hook = (a) => {
-      if (!a || a.__hfHooked) return;
-      a.__hfHooked = true;
-      // 새 오디오가 등장한 시점에 이미 autoplay 가 시작되어
-      // 'play' 리스너를 놓치는 경합을 막기 위해 즉시 VAD를 멈춘다.
-      if (window.__hfVAD) { try { window.__hfVAD.pause(); window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)'); } catch (e) {} }
-      a.addEventListener('play', () => {
-        if (window.__hfVAD) { try { window.__hfVAD.pause(); window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)'); } catch (e) {} }
-      });
-      a.addEventListener('ended', window.__hfResetAfterPlayback);
-      // 외부 요인(교체/오류 등)으로 재생이 멈춰도 상태가 굳지 않게 안전망.
-      a.addEventListener('pause', () => {
-        if (a.ended || a.currentTime >= a.duration - 0.05) {
-          window.__hfResetAfterPlayback();
-        }
-      });
-      a.addEventListener('emptied', window.__hfResetAfterPlayback);
-      // timeupdate 기반 종료 감지 — 일부 브라우저에서 ended 이벤트가 누락되는 경우 대비.
-      a.addEventListener('timeupdate', () => {
-        if (a.duration > 0 && a.currentTime >= a.duration - 0.1) {
-          window.__hfResetAfterPlayback();
-        }
-      });
-    };
-    hook(document.querySelector('#voice_reply audio'));
-    // Gradio가 audio 엘리먼트를 교체/제거하거나 src만 갈아 끼워도 상태가 굳지 않게 자동 후킹/감지.
-    const target = document.querySelector('#voice_reply') || document.body;
+    // 이벤트 위임 — per-element hook 대신 document 에 capture phase로 한 번만 건다.
+    // Gradio가 audio 엘리먼트를 교체/제거/재사용 해도 같은 핸들러가 동작.
+    // 'play'/'ended'/'timeupdate' 등은 기본적으로 bubble 하지 않으니 capture(true) 필수.
+    const isVoiceReply = (el) => el && el.tagName === 'AUDIO' && el.closest && el.closest('#voice_reply');
+    document.addEventListener('play', (e) => {
+      if (!isVoiceReply(e.target)) return;
+      if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
+      window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
+    }, true);
+    document.addEventListener('ended', (e) => {
+      if (!isVoiceReply(e.target)) return;
+      window.__hfResetAfterPlayback();
+    }, true);
+    document.addEventListener('pause', (e) => {
+      if (!isVoiceReply(e.target)) return;
+      const a = e.target;
+      if (a.ended || (a.duration > 0 && a.currentTime >= a.duration - 0.05)) {
+        window.__hfResetAfterPlayback();
+      }
+    }, true);
+    document.addEventListener('emptied', (e) => {
+      if (!isVoiceReply(e.target)) return;
+      window.__hfResetAfterPlayback();
+    }, true);
+    document.addEventListener('timeupdate', (e) => {
+      if (!isVoiceReply(e.target)) return;
+      const a = e.target;
+      if (a.duration > 0 && a.currentTime >= a.duration - 0.1) {
+        window.__hfResetAfterPlayback();
+      }
+    }, true);
+    // 새 audio 엘리먼트 추가 시 즉시 VAD pause (autoplay 시작과 'play' 이벤트 사이 race 대비)
     new MutationObserver((muts) => {
-      let removed = false;
-      let srcChanged = false;
       for (const m of muts) {
-        for (const node of (m.removedNodes || [])) {
-          if (node && node.tagName === 'AUDIO') { removed = true; break; }
-        }
-        if (m.type === 'attributes' && m.attributeName === 'src' && m.target && m.target.tagName === 'AUDIO') {
-          srcChanged = true;
+        for (const node of (m.addedNodes || [])) {
+          if (node && node.tagName === 'AUDIO' && node.closest && node.closest('#voice_reply')) {
+            if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
+            window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
+            return;
+          }
         }
       }
-      hook(document.querySelector('#voice_reply audio'));
-      if (srcChanged && window.__hfVAD) {
-        try { window.__hfVAD.pause(); } catch (e) {}
-        window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
-      }
-      if (removed) window.__hfResetAfterPlayback();
-    }).observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+    }).observe(document.body, { childList: true, subtree: true });
   };
   window.hfToggle = async () => {
     try {
