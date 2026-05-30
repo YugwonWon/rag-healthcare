@@ -669,6 +669,31 @@ HANDSFREE_INIT_JS = """
         }
       }
     }).observe(document.body, { childList: true, subtree: true });
+
+    // 폴링 fallback — 이벤트가 어떤 이유로 안 잡혀도 audio.currentTime/duration 으로
+    // 재생/종료 상태를 직접 감지. 500ms 주기로 비싸지 않게 동작.
+    setInterval(() => {
+      const a = document.querySelector('#voice_reply audio');
+      if (!a || !a.src) return;
+      // 재생 시작 감지
+      if (!a.paused && a.currentTime > 0 && !window.__hfPollPlaying) {
+        window.__hfPollPlaying = true;
+        if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
+        window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
+        console.log('[hf poll] play 감지 — duration=' + a.duration);
+      }
+      // 종료 감지: duration 끝에 닿았고, 아직 reset 안 했으면
+      if (window.__hfPollPlaying && a.duration > 0 && a.currentTime >= a.duration - 0.15 && !window.__hfPollEnded) {
+        window.__hfPollEnded = true;
+        console.log('[hf poll] end 감지 — currentTime=' + a.currentTime + ' duration=' + a.duration);
+        window.__hfResetAfterPlayback();
+      }
+      // 새 audio src 가 들어와 currentTime 이 0 으로 리셋되면 새 턴 시작 — 플래그 초기화
+      if (window.__hfPollEnded && a.currentTime < 0.1) {
+        window.__hfPollPlaying = false;
+        window.__hfPollEnded = false;
+      }
+    }, 500);
   };
   window.hfToggle = async () => {
     try {
