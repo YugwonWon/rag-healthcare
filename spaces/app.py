@@ -357,35 +357,41 @@ async def _voice_process(nickname: str, audio_path: str, history: list):
 
     if not transcript:
         history.append({"role": "assistant", "content": response or "잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?"})
-        return history, None
+        return history, None, ""
 
     history.append({"role": "user", "content": f"🎤 {transcript}"})
     history.append({"role": "assistant", "content": response})
 
     tts_path = None
+    tts_data_url = ""  # ⭐ JS 가 직접 new Audio() 로 재생할 base64 data URL
     try:
         async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
             tr = await client.post(f"{BACKEND_URL}/tts", json={"text": response})
         if tr.status_code == 200:
-            ext = ".mp3" if "mpeg" in tr.headers.get("content-type", "") else ".wav"
+            ctype = tr.headers.get("content-type", "audio/wav")
+            is_mp3 = "mpeg" in ctype or "mp3" in ctype
+            ext = ".mp3" if is_mp3 else ".wav"
             with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tf:
                 tf.write(tr.content)
                 tts_path = tf.name
+            import base64 as _b64
+            mime = "audio/mpeg" if is_mp3 else "audio/wav"
+            tts_data_url = f"data:{mime};base64,{_b64.b64encode(tr.content).decode('ascii')}"
     except httpx.HTTPError as e:
         print(f"❌ tts 에러: {e}")
-    return history, tts_path
+    return history, tts_path, tts_data_url
 
 
 async def voice_chat_fn(nickname: str, audio_path, history: list):
-    """press-to-talk 마이크(파일경로) 입구."""
+    """press-to-talk 마이크(파일경로) 입구. 반환: (history, voice_reply, voice_input, tts_player)"""
     if not nickname or not nickname.strip():
         history = history or []
         history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
-        return history, None, None
+        return history, None, None, gr.update()
     if not audio_path:
-        return history or [], None, None
-    history, tts_path = await _voice_process(nickname, audio_path, history)
-    return history, tts_path, None
+        return history or [], None, None, gr.update()
+    history, tts_path, tts_url = await _voice_process(nickname, audio_path, history)
+    return history, tts_path, None, tts_url
 
 
 _last_b64_hash: Optional[str] = None
@@ -401,9 +407,9 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
     import time as _time
 
     # 빈 입력은 출력 리셋으로 인한 spurious 재호출 — 어떤 컴포넌트도 건드리지 않는다.
-    # (특히 voice_reply 를 None 으로 덮으면 autoplay audio가 재-render되어 처음부터 다시 재생된다)
+    # 반환 순서: (history, voice_reply, vad_b64, tts_player)
     if not audio_b64:
-        return gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update()
 
     # Lock 으로 dedupe 윈도우의 race 를 없앤다 (Gradio queue가 같은 이벤트를 동시에 두 번 보낼 때 보호).
     if _voice_lock is None:
@@ -414,35 +420,34 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
         # (a) 같은 b64 가 30초 안에 또 들어오면 같은 발화의 중복 — 무시
         if h == _last_b64_hash and (now - _last_b64_at) < 30:
             print(f"⏭️ 중복 audio_b64 무시 — same hash (h={h[:8]} dt={now - _last_b64_at:.1f}s)")
-            return gr.update(), gr.update(), gr.update()
+            return gr.update(), gr.update(), gr.update(), gr.update()
         # (b) 직전 처리 후 20초 안에 어떤 audio_b64든 또 들어오면 너무 빠른 재진입 — 무시
         #     (응답 TTS 가 스피커→마이크 echo 로 다시 잡혀 트리거되는 self-loop 차단.
         #      실측: 첫 응답 13.7s + TTS ~10s 후 ~17s 시점에 두 번째 호출이 들어오는 패턴 관찰됨)
         if (now - _last_b64_at) < 20:
             print(f"⏭️ 20초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
-            return gr.update(), gr.update(), gr.update()
+            return gr.update(), gr.update(), gr.update(), gr.update()
         _last_b64_hash = h
         _last_b64_at = now
 
     if not nickname or not nickname.strip():
         history = history or []
         history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
-        return history, gr.update(), gr.update()
+        return history, gr.update(), gr.update(), gr.update()
     import base64
     raw = base64.b64decode(audio_b64.split(",")[-1])
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         tf.write(raw)
         path = tf.name
     try:
-        history, tts_path = await _voice_process(nickname, path, history)
+        history, tts_path, tts_url = await _voice_process(nickname, path, history)
     finally:
         try:
             os.remove(path)
         except OSError:
             pass
-    # vad_b64는 gr.update() 로 둬서 다음 b64가 들어올 때만 .change 가 발화하게 한다.
-    # ""로 강제 reset 하면 그 자체가 change 를 발화시켜 voice_reply 가 한 번 더 재-render → 재생 2회.
-    return history, tts_path, gr.update()
+    # vad_b64는 gr.update() 로 둔다. tts_player 에 data URL 을 넣어 JS 가 직접 재생.
+    return history, tts_path, gr.update(), tts_url
 
 
 async def on_nickname_submit(nickname: str) -> tuple[str, str]:
@@ -623,111 +628,47 @@ HANDSFREE_INIT_JS = """
     }, 1500);
   };
 
+  // ⭐ 우리가 직접 만든 Audio 객체로 TTS 를 재생한다.
+  // Gradio 의 WaveSurfer 플레이어는 네이티브 <audio> 의 src 를 비워둔 채 Web Audio API 로
+  // 재생해서 'play'/'ended'/src/currentTime 어느 것도 신뢰할 수 없었음(콘솔 로그로 확인:
+  // 'audio 노드 추가 — src=(empty)' 만 찍히고 그 외엔 전무 → 60s 안전타이머만 발동).
+  // 그래서 백엔드가 TTS 를 base64 data URL 로 hidden textbox(#tts_player)에 넘기면
+  // 그 값을 폴링해 new Audio() 로 직접 재생/종료감지한다. 이 Audio 의 이벤트는 100% 우리 통제.
+  window.__hfPlayTTS = (dataUrl) => {
+    if (!dataUrl) return;
+    if (window.__hfAudio) { try { window.__hfAudio.pause(); } catch (_) {} }
+    if (window.__hfStatusFailsafe) { clearTimeout(window.__hfStatusFailsafe); window.__hfStatusFailsafe = null; }
+    const a = new Audio(dataUrl);
+    window.__hfAudio = a;
+    if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
+    window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
+    a.addEventListener('ended', () => { console.log('[hf tts] ended — 마이크 재개'); window.__hfResetAfterPlayback(); });
+    a.addEventListener('error', () => { console.warn('[hf tts] audio error'); window.__hfResetAfterPlayback(); });
+    const p = a.play();
+    if (p && p.catch) p.catch(err => {
+      console.warn('[hf tts] play() 차단:', err && err.message);
+      // 자동재생이 막혀도 마이크는 추정 시간 뒤 풀어줘 영구 stuck 방지.
+      const secs = (a.duration && isFinite(a.duration)) ? a.duration : 10;
+      window.__hfStatusFailsafe = setTimeout(() => window.__hfResetAfterPlayback(), secs * 1000 + 1000);
+    });
+  };
+
   window.__hfHookReply = () => {
     if (window.__hfObsSetup) return;
     window.__hfObsSetup = true;
-    // 이벤트 위임 — per-element hook 대신 document 에 capture phase로 한 번만 건다.
-    // Gradio가 audio 엘리먼트를 교체/제거/재사용/elem_id 컨테이너 밖에 생성 해도 모두 잡힘.
-    // 페이지에 다른 audio 소스가 없으니 #voice_reply 종속을 빼고 모든 AUDIO 를 후보로 본다.
-    // 'play'/'ended'/'timeupdate' 등은 기본적으로 bubble 하지 않으니 capture(true) 필수.
-    const isVoiceReply = (el) => el && el.tagName === 'AUDIO';
-    document.addEventListener('play', (e) => {
-      if (!isVoiceReply(e.target)) return;
-      if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
-      window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
-    }, true);
-    document.addEventListener('ended', (e) => {
-      if (!isVoiceReply(e.target)) return;
-      window.__hfResetAfterPlayback();
-    }, true);
-    document.addEventListener('pause', (e) => {
-      if (!isVoiceReply(e.target)) return;
-      const a = e.target;
-      if (a.ended || (a.duration > 0 && a.currentTime >= a.duration - 0.05)) {
-        window.__hfResetAfterPlayback();
-      }
-    }, true);
-    document.addEventListener('emptied', (e) => {
-      if (!isVoiceReply(e.target)) return;
-      window.__hfResetAfterPlayback();
-    }, true);
-    document.addEventListener('timeupdate', (e) => {
-      if (!isVoiceReply(e.target)) return;
-      const a = e.target;
-      if (a.duration > 0 && a.currentTime >= a.duration - 0.1) {
-        window.__hfResetAfterPlayback();
-      }
-    }, true);
-    // Gradio 가 audio 를 빈 src 로 먼저 추가하고 나중에 src 를 주입하는 패턴이라
-    // ① childList(추가) ② attribute src(주입) 둘 다 감시해야 한다.
-    // src 가 채워지는 시점에 명시적으로 play() 호출 — autoplay 정책 + 늦은 src 주입 모두 우회.
-    const onSrcReady = (audio) => {
-      const src = audio.src || audio.currentSrc;
-      if (!src || audio.__hfPlayed) return;
-      audio.__hfPlayed = true;
-      console.log('[hf src] play() 호출 — src tail=' + src.slice(-50));
-      const p = audio.play();
-      if (p && p.catch) p.catch(e => console.warn('[hf] play() 차단:', e.message));
-      if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
-      window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
-    };
-    new MutationObserver((muts) => {
-      for (const m of muts) {
-        for (const node of (m.addedNodes || [])) {
-          if (!node || !node.querySelector) continue;
-          const audio = node.tagName === 'AUDIO' ? node : node.querySelector('audio');
-          if (audio) {
-            console.log('[hf obs] audio 노드 추가 — src=' + (audio.src || audio.currentSrc || '(empty)').slice(-40));
-            onSrcReady(audio);  // src 있으면 즉시, 없으면 attribute 변화 대기
-          }
-        }
-        if (m.type === 'attributes' && m.attributeName === 'src' &&
-            m.target && m.target.tagName === 'AUDIO') {
-          console.log('[hf obs] audio src 변경');
-          m.target.__hfPlayed = false;  // 새 src 라 재실행 허용
-          onSrcReady(m.target);
-        }
-      }
-    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
-
-    // 폴링 fallback — 이벤트가 안 잡혀도 audio.currentTime/duration 으로 재생/종료 감지.
-    // 500ms 주기. src 없는 audio 도 추적 후보로 둬서 src 주입 시점을 놓치지 않는다.
+    // hidden #tts_player textbox 의 값(새 TTS data URL)을 폴링 → 우리 Audio 로 재생.
     setInterval(() => {
-      const audios = document.querySelectorAll('audio');
-      if (audios.length === 0) return;
-      // src 있는 audio 우선, 없으면 마지막 audio 라도 추적
-      let a = null;
-      for (const el of audios) { if (el.src || el.currentSrc) a = el; }
-      if (!a) a = audios[audios.length - 1];
-      // src 채워졌는데 아직 안 돌고 있으면 강제 play (한 번만)
-      if ((a.src || a.currentSrc) && a.paused && a.currentTime === 0 &&
-          !window.__hfPollPlaying && !window.__hfPollTriedPlay) {
-        window.__hfPollTriedPlay = true;
-        console.log('[hf poll] paused + src 있음 — play() 시도');
-        const p = a.play();
-        if (p && p.catch) p.catch(e => console.warn('[hf poll] play 실패:', e.message));
+      const el = document.querySelector('#tts_player textarea') || document.querySelector('#tts_player input');
+      if (!el) return;
+      const v = el.value || '';
+      if (!v) return;
+      const sig = v.length + '|' + v.slice(0, 32);  // 큰 문자열 전체 비교 회피
+      if (sig !== window.__hfLastTTSsig) {
+        window.__hfLastTTSsig = sig;
+        console.log('[hf tts] 새 TTS 감지 — len=' + v.length);
+        window.__hfPlayTTS(v);
       }
-      // 재생 시작 감지
-      if (!a.paused && a.currentTime > 0 && !window.__hfPollPlaying) {
-        window.__hfPollPlaying = true;
-        if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
-        window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
-        console.log('[hf poll] play 감지 — duration=' + a.duration + ' currentTime=' + a.currentTime);
-      }
-      // 종료 감지: duration 끝 또는 ended
-      if (window.__hfPollPlaying && !window.__hfPollEnded &&
-          ((a.duration > 0 && a.currentTime >= a.duration - 0.15) || a.ended)) {
-        window.__hfPollEnded = true;
-        console.log('[hf poll] end 감지 — currentTime=' + a.currentTime + ' duration=' + a.duration + ' ended=' + a.ended);
-        window.__hfResetAfterPlayback();
-      }
-      // 새 audio/턴 시작 — 플래그 초기화
-      if (window.__hfPollEnded && a.currentTime < 0.1) {
-        window.__hfPollPlaying = false;
-        window.__hfPollEnded = false;
-        window.__hfPollTriedPlay = false;
-      }
-    }, 500);
+    }, 300);
   };
   window.hfToggle = async () => {
     try {
@@ -805,7 +746,7 @@ HANDSFREE_INIT_JS = """
 """
 
 
-with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64 {display: none !important;}") as demo:
+with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64, #tts_player {display: none !important;}") as demo:
     
     with gr.Row():
         with gr.Column(scale=4):
@@ -881,12 +822,17 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
                     type="filepath",
                     label="녹음 후 ■(정지)를 누르면 전송됩니다",
                 )
+            # autoplay=False — 실제 재생은 JS 가 #tts_player 의 data URL 로 직접 한다.
+            # (Gradio WaveSurfer 플레이어는 ended/src 감지가 불가능해 상태 stuck 유발)
+            # voice_reply 는 시각적 파형/수동 재생용으로만 유지.
             voice_reply = gr.Audio(
-                label="🔊 음성 답변", autoplay=True, interactive=False, elem_id="voice_reply"
+                label="🔊 음성 답변", autoplay=False, interactive=False, elem_id="voice_reply"
             )
             # 핸즈프리 브릿지: visible=False면 DOM에 textarea가 안 생겨 JS가 못 찾으므로,
-            # 렌더는 하되 CSS(#vad_b64 display:none)로 숨긴다. VAD가 값 주입 → .change로 처리.
+            # 렌더는 하되 CSS(display:none)로 숨긴다. VAD가 값 주입 → .change로 처리.
             vad_b64 = gr.Textbox(elem_id="vad_b64")
+            # TTS data URL 전달용 hidden textbox — JS 가 폴링해 new Audio() 로 재생/종료감지.
+            tts_player = gr.Textbox(elem_id="tts_player")
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
@@ -1096,7 +1042,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
     voice_input.stop_recording(
         fn=voice_chat_fn,
         inputs=[nickname_input, voice_input, chatbot],
-        outputs=[chatbot, voice_reply, voice_input],
+        outputs=[chatbot, voice_reply, voice_input, tts_player],
         api_name=False,
     )
 
@@ -1105,7 +1051,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
     vad_b64.change(
         fn=voice_chat_b64_fn,
         inputs=[nickname_input, vad_b64, chatbot],
-        outputs=[chatbot, voice_reply, vad_b64],
+        outputs=[chatbot, voice_reply, vad_b64, tts_player],
         api_name=False,
     )
     # 페이지 로드 시 핸즈프리 JS 초기화
