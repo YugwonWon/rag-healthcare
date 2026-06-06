@@ -105,6 +105,8 @@ class OllamaClient:
                 "stop": [
                     "<|im_end|>", "<|im_start|>", "<|endoftext|>",
                     "<|email_address|>", "<|im_email-end|>", "</s>",
+                    # 파이프 2개 변형 — 2.1B 모델이 <||im_end|> 처럼 뱉는 케이스 관찰됨
+                    "<||im_end|>", "<||im_start|>", "<||endoftext|>",
                 ],
             }
         }
@@ -144,9 +146,15 @@ class OllamaClient:
         # 2) <tool_call> 등 hallucinated 태그 제거
         content = re.sub(r"</?tool_call[^>]*>", "", content)
 
-        # 2b) ChatML·특수 토큰 잔재 정리 — <|im_end|>, <|email_address|>, </|im_end|> 등.
+        # 2b) ChatML·특수 토큰 잔재 정리 — <|im_end|>, <||im_end|>, </|im_end|>,
+        #     <|email_address|> 등. 파이프가 1개든 여러 개든(<||...||>) 모두 제거.
         #     stop 시퀀스가 1차 차단하지만 그래도 새는 경우의 2차 안전망.
-        content = re.sub(r"</?\|[^|<>]*\|>", "", content)
+        content = re.sub(r"</?\|+[^<>]*?\|+>", "", content)
+        # 닫힘이 불완전한 잔재(<|im_end, <||im_end| 등)도 알려진 토큰명 기준으로 제거.
+        content = re.sub(
+            r"<\|+\s*(?:im_end|im_start|endoftext|email_address|im_email-end)\s*\|*>?",
+            "", content, flags=re.IGNORECASE,
+        )
 
         # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
         content = content.strip()

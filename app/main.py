@@ -427,9 +427,13 @@ async def speech_to_text(
             pass
 
 
-def _truncate_for_tts(text: str, max_chars: int = 200) -> str:
+def _truncate_for_tts(text: str, max_chars: int = 500) -> str:
     """음성 답변은 짧아야 듣기 좋고 TTS도 안정적(긴 입력은 melo가 실패하기도 함).
-    max_chars 초과 시 문장 경계에서 자른다. (대화창 텍스트는 전체가 그대로 표시됨)"""
+    max_chars 초과 시 문장 경계에서 자른다. (대화창 텍스트는 전체가 그대로 표시됨)
+
+    cap=500: melo 사이드카가 ~291자를 9초에 정상 합성 확인(2026-06). 200자 컷은
+    여러 문단 응답의 뒷부분이 TTS 에서 통째로 누락되는 문제가 있어 상향. 500자를
+    초과하는 비정상적으로 긴 응답만 문장 경계에서 자른다."""
     text = (text or "").strip()
     if len(text) <= max_chars:
         return text
