@@ -653,39 +653,54 @@ HANDSFREE_INIT_JS = """
         window.__hfResetAfterPlayback();
       }
     }, true);
-    // 새 audio 엘리먼트 추가 시: ① 강제 play() 호출(브라우저 autoplay 정책 우회), ② VAD pause.
-    // node 자체가 AUDIO 가 아닐 수 있어 (wrapper div) querySelector 로도 탐색.
+    // Gradio 가 audio 를 빈 src 로 먼저 추가하고 나중에 src 를 주입하는 패턴이라
+    // ① childList(추가) ② attribute src(주입) 둘 다 감시해야 한다.
+    // src 가 채워지는 시점에 명시적으로 play() 호출 — autoplay 정책 + 늦은 src 주입 모두 우회.
+    const onSrcReady = (audio) => {
+      const src = audio.src || audio.currentSrc;
+      if (!src || audio.__hfPlayed) return;
+      audio.__hfPlayed = true;
+      console.log('[hf src] play() 호출 — src tail=' + src.slice(-50));
+      const p = audio.play();
+      if (p && p.catch) p.catch(e => console.warn('[hf] play() 차단:', e.message));
+      if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
+      window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
+    };
     new MutationObserver((muts) => {
       for (const m of muts) {
         for (const node of (m.addedNodes || [])) {
           if (!node || !node.querySelector) continue;
           const audio = node.tagName === 'AUDIO' ? node : node.querySelector('audio');
           if (audio) {
-            console.log('[hf obs] audio 엘리먼트 감지 — src=' + (audio.src || audio.currentSrc || 'none').slice(-60));
-            // autoplay 정책으로 막혔을 수 있으니 명시적 play() (handsfree 시작 시 user gesture 체인 이후라 허용됨)
-            const p = audio.play();
-            if (p && p.catch) p.catch(e => console.warn('[hf] audio.play() blocked:', e.message));
-            if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
-            window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
-            return;
+            console.log('[hf obs] audio 노드 추가 — src=' + (audio.src || audio.currentSrc || '(empty)').slice(-40));
+            onSrcReady(audio);  // src 있으면 즉시, 없으면 attribute 변화 대기
           }
         }
+        if (m.type === 'attributes' && m.attributeName === 'src' &&
+            m.target && m.target.tagName === 'AUDIO') {
+          console.log('[hf obs] audio src 변경');
+          m.target.__hfPlayed = false;  // 새 src 라 재실행 허용
+          onSrcReady(m.target);
+        }
       }
-    }).observe(document.body, { childList: true, subtree: true });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
 
-    // 폴링 fallback — 이벤트가 어떤 이유로 안 잡혀도 audio.currentTime/duration 으로 재생/종료 감지.
-    // 500ms 주기. #voice_reply 종속을 빼고 페이지 내 src 있는 모든 AUDIO 중 가장 최근 것 선택.
+    // 폴링 fallback — 이벤트가 안 잡혀도 audio.currentTime/duration 으로 재생/종료 감지.
+    // 500ms 주기. src 없는 audio 도 추적 후보로 둬서 src 주입 시점을 놓치지 않는다.
     setInterval(() => {
       const audios = document.querySelectorAll('audio');
+      if (audios.length === 0) return;
+      // src 있는 audio 우선, 없으면 마지막 audio 라도 추적
       let a = null;
-      for (const el of audios) { if (el.src || el.currentSrc) a = el; }  // 마지막 매칭이 최신
-      if (!a) return;
-      // 재생 안 됐고 src 있는데 paused 면 강제 play 재시도 (autoplay 차단 복구)
-      if (a.paused && a.currentTime === 0 && (a.src || a.currentSrc) && !window.__hfPollPlaying && !window.__hfPollTriedPlay) {
+      for (const el of audios) { if (el.src || el.currentSrc) a = el; }
+      if (!a) a = audios[audios.length - 1];
+      // src 채워졌는데 아직 안 돌고 있으면 강제 play (한 번만)
+      if ((a.src || a.currentSrc) && a.paused && a.currentTime === 0 &&
+          !window.__hfPollPlaying && !window.__hfPollTriedPlay) {
         window.__hfPollTriedPlay = true;
-        console.log('[hf poll] paused — 강제 play 시도');
+        console.log('[hf poll] paused + src 있음 — play() 시도');
         const p = a.play();
-        if (p && p.catch) p.catch(e => console.warn('[hf poll] play() 실패:', e.message));
+        if (p && p.catch) p.catch(e => console.warn('[hf poll] play 실패:', e.message));
       }
       // 재생 시작 감지
       if (!a.paused && a.currentTime > 0 && !window.__hfPollPlaying) {
@@ -694,14 +709,14 @@ HANDSFREE_INIT_JS = """
         window.__hfStatus('🔊 답변 재생 중… (마이크 일시정지)');
         console.log('[hf poll] play 감지 — duration=' + a.duration + ' currentTime=' + a.currentTime);
       }
-      // 종료 감지: duration 끝에 닿았거나, ended 플래그 true
+      // 종료 감지: duration 끝 또는 ended
       if (window.__hfPollPlaying && !window.__hfPollEnded &&
           ((a.duration > 0 && a.currentTime >= a.duration - 0.15) || a.ended)) {
         window.__hfPollEnded = true;
         console.log('[hf poll] end 감지 — currentTime=' + a.currentTime + ' duration=' + a.duration + ' ended=' + a.ended);
         window.__hfResetAfterPlayback();
       }
-      // 새 audio src 가 들어와 currentTime 이 0 으로 리셋되면 새 턴 시작 — 플래그 초기화
+      // 새 audio/턴 시작 — 플래그 초기화
       if (window.__hfPollEnded && a.currentTime < 0.1) {
         window.__hfPollPlaying = false;
         window.__hfPollEnded = false;
