@@ -156,6 +156,10 @@ class OllamaClient:
             "", content, flags=re.IGNORECASE,
         )
 
+        # 2c) 프롬프트 라벨 누출 제거 — 2.1B 모델이 "가벼운 질문:", "후속 질문:" 같은
+        #     지시어 라벨을 응답에 그대로 붙이는 경우(줄 시작·문중 모두). 라벨만 떼고 질문은 살린다.
+        content = re.sub(r"(?:가벼운|후속|추가|간단한)?\s*질문\s*[:：]\s*", "", content)
+
         # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
         content = content.strip()
         content = re.sub(r"^\[[-\d]*\]\s*", "", content)  # [-1] 등
