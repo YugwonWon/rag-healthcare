@@ -51,27 +51,31 @@ services:
       timeout: 15s
       start_period: 120s
       retries: 3
-    depends_on:
-      - ngrok
 
-  ngrok:
-    image: ngrok/ngrok:latest
-    container_name: healthcare-ngrok
-    restart: unless-stopped
-    command: >
-      http app:8000
-      --domain=acronymous-nonobsessive-chong.ngrok-free.dev
-      --log=stdout
-    env_file:
-      - .env.local
-    ports:
-      - "4040:4040"    # ngrok 대시보드
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:4040/api/tunnels"]
-      interval: 10s
-      timeout: 5s
-      start_period: 10s
-      retries: 5
+  # ── ngrok 서비스 비활성화 (2026-06-11) ──────────────────────────────
+  # 공개 터널을 Tailscale Funnel(호스트 네이티브)로 이전.
+  #   - ngrok 무료는 동시 세션 1개 제한 → 다른 프로젝트(8077 ngrok)와 충돌(ERR_334)
+  #   - Tailscale Funnel: https://yugwon-macmini.tail7f37ba.ts.net → 127.0.0.1:8000
+  #     `tailscale funnel --bg 8000` 으로 켜짐(재부팅 후 자동 복원). 워치독이 점검.
+  # 다시 ngrok 으로 돌리려면 아래 주석 해제 + app 의 depends_on 복원.
+  # ngrok:
+  #   image: ngrok/ngrok:latest
+  #   container_name: healthcare-ngrok
+  #   restart: unless-stopped
+  #   command: >
+  #     http app:8000
+  #     --domain=acronymous-nonobsessive-chong.ngrok-free.dev
+  #     --log=stdout
+  #   env_file:
+  #     - .env.local
+  #   ports:
+  #     - "4040:4040"
+  #   healthcheck:
+  #     test: ["CMD", "wget", "-qO-", "http://localhost:4040/api/tunnels"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     start_period: 10s
+  #     retries: 5
 
 volumes:
   huggingface_cache:
