@@ -126,6 +126,13 @@ class Settings(BaseSettings):
     # ADMIN_API_KEY와 별개 — 프론트 관리자 탭에서 입력받아 검증한다.
     ADMIN_PASSWORD: Optional[str] = None
 
+    # 클라이언트 API 키 — 공개 URL 보호용.
+    # 설정되면 /health·/docs 제외한 모든 요청이 X-API-Key 헤더를 요구한다.
+    # 프론트(Render/HF)가 이 키를 헤더에 실어 전송하므로 일반 사용자는 영향 없고,
+    # 인터넷 스캐너·무단 사용(LLM 컴퓨트, PII 조회)을 차단한다.
+    # 미설정 시 게이트 비활성(로컬 개발·Cloud Run 호환).
+    CLIENT_API_KEY: Optional[str] = None
+
     # ── 음성(STT/TTS) 설정 ──
     # 온디바이스 처리(환자 음성 외부 미전송)를 기본으로 한다. 음성 의존성이 없어도
     # 앱은 정상 기동하며, 음성 엔드포인트만 503을 반환한다(지연 로딩).

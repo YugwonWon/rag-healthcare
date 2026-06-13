@@ -76,12 +76,19 @@ IS_GRADIO_5 = GRADIO_VERSION < version.parse("6.0.0")
 print(f"📦 Gradio 버전: {gr.__version__} (5.x: {IS_GRADIO_5})")
 
 # 환경변수에서 백엔드 URL 가져오기
-BACKEND_URL = os.getenv("BACKEND_URL", "https://acronymous-nonobsessive-chong.ngrok-free.dev")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://yugwon-macmini.tail7f37ba.ts.net")
+
+# 공통 요청 헤더 — CLIENT_API_KEY 설정 시 X-API-Key 포함 (백엔드 게이트 통과)
+_client_api_key = os.getenv("CLIENT_API_KEY", "")
+BASE_HEADERS: dict = {"ngrok-skip-browser-warning": "true"}
+if _client_api_key:
+    BASE_HEADERS["X-API-Key"] = _client_api_key
 
 # 상태 저장용
 user_sessions = {}
 
 print(f"🔗 Backend URL: {BACKEND_URL}")
+print(f"🔑 API Key: {'설정됨' if _client_api_key else '미설정'}")
 
 # Cloud Run 콜드 스타트 + LLM 응답 시간 고려 (최대 180초)
 API_TIMEOUT = 180.0
@@ -89,9 +96,7 @@ API_TIMEOUT = 180.0
 
 async def call_api(endpoint: str, method: str = "GET", data: Optional[dict] = None) -> dict:
     """백엔드 API 호출"""
-    # ngrok 무료 플랜: 브라우저 경고 페이지 우회 헤더
-    headers = {"ngrok-skip-browser-warning": "true"}
-    async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=BASE_HEADERS) as client:
         url = f"{BACKEND_URL}{endpoint}"
         
         try:
@@ -161,7 +166,7 @@ async def admin_login(password: str):
     """관리자 비밀번호 검증. 성공 시 다운로드 영역을 노출한다."""
     if not password or not password.strip():
         return "비밀번호를 입력해주세요.", gr.update(visible=False), ""
-    headers = {"ngrok-skip-browser-warning": "true", "X-Admin-Password": password}
+    headers = {**BASE_HEADERS, "X-Admin-Password": password}
     async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
         try:
             resp = await client.post(f"{BACKEND_URL}/admin/login")
@@ -180,7 +185,7 @@ async def admin_download_csv(password: str, source_label: str):
     if not password:
         return None, "먼저 로그인해주세요."
     source = "logs" if "분석" in (source_label or "") else "history"
-    headers = {"ngrok-skip-browser-warning": "true", "X-Admin-Password": password}
+    headers = {**BASE_HEADERS, "X-Admin-Password": password}
     async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
         try:
             resp = await client.get(
@@ -213,7 +218,7 @@ async def admin_view_table(password: str, source_label: str):
     if not password:
         return pd.DataFrame(), "먼저 로그인해주세요."
     source = "logs" if "분석" in (source_label or "") else "history"
-    headers = {"ngrok-skip-browser-warning": "true", "X-Admin-Password": password}
+    headers = {**BASE_HEADERS, "X-Admin-Password": password}
     async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
         try:
             resp = await client.get(
@@ -331,7 +336,7 @@ async def _voice_process(nickname: str, audio_path: str, history: list):
         await call_api("/profile", "POST", {"nickname": nickname})
         user_sessions[nickname] = {"started_at": datetime.now().isoformat()}
 
-    headers = {"ngrok-skip-browser-warning": "true"}
+    headers = BASE_HEADERS
     transcript, response = "", ""
     try:
         async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:

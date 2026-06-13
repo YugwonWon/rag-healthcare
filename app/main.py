@@ -222,11 +222,15 @@ async def lifespan(app: FastAPI):
 
 
 # FastAPI 앱 초기화
+# docs_url=None — Swagger UI 비활성화(공개 URL에서 API 구조 노출 방지)
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="치매노인을 위한 맞춤형 헬스케어 RAG 챗봇 API",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 # CORS 설정
@@ -238,6 +242,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 클라이언트 API 키 게이트 — CLIENT_API_KEY 설정 시 모든 요청 검증.
+# /health 는 워치독·Render 헬스체크를 위해 항상 통과.
+@app.middleware("http")
+async def client_api_key_gate(request: Request, call_next):
+    if settings.CLIENT_API_KEY:
+        path = request.url.path
+        # /health 는 워치독·헬스체크, / 는 루트 ping — 인증 면제
+        if path not in ("/health", "/"):
+            key = request.headers.get("X-API-Key", "")
+            if key != settings.CLIENT_API_KEY:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=401, content={"detail": "Invalid API key"})
+    return await call_next(request)
+
 
 # 관리자 API 키 인증
 _api_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)
