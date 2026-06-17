@@ -448,13 +448,13 @@ async def speech_to_text(
             pass
 
 
-def _truncate_for_tts(text: str, max_chars: int = 500) -> str:
-    """음성 답변은 짧아야 듣기 좋고 TTS도 안정적(긴 입력은 melo가 실패하기도 함).
-    max_chars 초과 시 문장 경계에서 자른다. (대화창 텍스트는 전체가 그대로 표시됨)
+def _truncate_for_tts(text: str, max_chars: int = 180) -> str:
+    """음성 답변은 짧아야 듣기 좋고 자동재생도 안정적이다. (대화창엔 전체 표시됨)
 
-    cap=500: melo 사이드카가 ~291자를 9초에 정상 합성 확인(2026-06). 200자 컷은
-    여러 문단 응답의 뒷부분이 TTS 에서 통째로 누락되는 문제가 있어 상향. 500자를
-    초과하는 비정상적으로 긴 응답만 문장 경계에서 자른다."""
+    cap=180: 노인 음성 UX는 1~3문장이면 충분하고, 길수록 ① 재생이 길어지고
+    ② base64 data URL 이 커져(>2MB) Gradio Textbox 전달 중 손상→자동재생 실패가
+    관찰됨(2026-06: 2.6MB에서 new Audio가 즉시 ended 발생). 그래서 문장 경계에서
+    짧게 끊어 작은(≲1.4MB) 오디오를 만든다. max_chars 초과 시 마지막 문장 경계에서 자른다."""
     text = (text or "").strip()
     if len(text) <= max_chars:
         return text

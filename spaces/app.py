@@ -453,11 +453,11 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
         if h == _last_b64_hash and (now - _last_b64_at) < 30:
             print(f"⏭️ 중복 audio_b64 무시 — same hash (h={h[:8]} dt={now - _last_b64_at:.1f}s)")
             return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
-        # (b) 직전 처리 후 20초 안에 어떤 audio_b64든 또 들어오면 너무 빠른 재진입 — 무시
-        #     (응답 TTS 가 스피커→마이크 echo 로 다시 잡혀 트리거되는 self-loop 차단.
-        #      실측: 첫 응답 13.7s + TTS ~10s 후 ~17s 시점에 두 번째 호출이 들어오는 패턴 관찰됨)
-        if (now - _last_b64_at) < 20:
-            print(f"⏭️ 20초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
+        # (b) 직전 처리 후 6초 안에 또 들어오면 같은 이벤트의 즉시 중복발사로 보고 무시.
+        #     에코(스피커→마이크) 자체는 재생 중 VAD를 pause()해 클라이언트에서 막으므로,
+        #     예전 20초 창은 어르신의 정상적인 다음 발화까지 삼켜 '처리중' 고착을 유발했음 → 축소.
+        if (now - _last_b64_at) < 6:
+            print(f"⏭️ 6초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
             return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
         _last_b64_hash = h
         _last_b64_at = now
