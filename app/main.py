@@ -58,6 +58,7 @@ class ChatResponse(BaseModel):
     routine_status: Optional[str] = None
     health_analysis: Optional[dict] = None  # NER + N-gram 기반 건강 분석 결과
     emergency_alert: Optional[dict] = None  # 위급 상황 알림
+    conversation_ended: bool = False  # 대화 종료 신호 (프론트가 핸즈프리 중단)
 
 
 class GreetingRequest(BaseModel):
@@ -397,7 +398,8 @@ async def chat(
             medication_reminders=med_reminders if med_reminders else None,
             routine_status=routine_status,
             health_analysis=health_analysis,
-            emergency_alert=emergency_alert
+            emergency_alert=emergency_alert,
+            conversation_ended=result.get("conversation_ended", False) if isinstance(result, dict) else False,
         )
     
     except Exception as e:
@@ -519,11 +521,13 @@ async def voice_chat(
     response = result.get("response", "") if isinstance(result, dict) else result
     intent = result.get("intent") if isinstance(result, dict) else None
     emergency_alert = result.get("emergency_alert") if isinstance(result, dict) else None
+    conversation_ended = result.get("conversation_ended", False) if isinstance(result, dict) else False
     return {
         "transcript": transcript,
         "response": response,
         "intent": intent,
         "emergency_alert": emergency_alert,
+        "conversation_ended": conversation_ended,
     }
 
 

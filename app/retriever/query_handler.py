@@ -118,6 +118,7 @@ class RAGQueryHandler:
             "intent": intent.value if isinstance(intent, Intent) else str(intent),
             "emergency_alert": emergency_alert,
             "graph_context": result.get("graph_context", ""),
+            "conversation_ended": bool(result.get("conversation_ended", False)),
         }
     
     # ==========================================

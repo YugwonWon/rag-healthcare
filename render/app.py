@@ -329,43 +329,13 @@ async def chat_with_bot(
     return history, ""
 
 
-async def _voice_process(nickname: str, audio_path: str, history: list):
-    """오디오 파일 → /voice-chat 전사·응답 → 대화기록 추가 + TTS 음성경로. (history, tts_path)"""
-    history = history or []
-    if nickname not in user_sessions:
-        await call_api("/profile", "POST", {"nickname": nickname})
-        user_sessions[nickname] = {"started_at": datetime.now().isoformat()}
-
-    headers = BASE_HEADERS
-    transcript, response = "", ""
+async def _synth_tts(response: str):
+    """텍스트 → (tts_path, data_url). JS 가 #tts_player 의 data URL 로 직접 재생한다."""
+    tts_path, tts_data_url = None, ""
+    if not response:
+        return tts_path, tts_data_url
     try:
-        async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
-            with open(audio_path, "rb") as f:
-                files = {"audio": (os.path.basename(audio_path), f, "audio/wav")}
-                resp = await client.post(
-                    f"{BACKEND_URL}/voice-chat", files=files, data={"nickname": nickname}
-                )
-            if resp.status_code == 200:
-                j = resp.json()
-                transcript = (j.get("transcript") or "").strip()
-                response = (j.get("response") or "").strip()
-            else:
-                response = "죄송해요, 음성 처리 중 오류가 났어요. 다시 말씀해 주세요."
-    except httpx.HTTPError as e:
-        print(f"❌ voice-chat 에러: {type(e).__name__}: {e}")
-        response = f"[음성 오류] {type(e).__name__}: {str(e)[:140]}"
-
-    if not transcript:
-        history.append({"role": "assistant", "content": response or "잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?"})
-        return history, None, ""
-
-    history.append({"role": "user", "content": f"🎤 {transcript}"})
-    history.append({"role": "assistant", "content": response})
-
-    tts_path = None
-    tts_data_url = ""  # ⭐ JS 가 직접 new Audio() 로 재생할 base64 data URL
-    try:
-        async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=BASE_HEADERS) as client:
             tr = await client.post(f"{BACKEND_URL}/tts", json={"text": response})
         if tr.status_code == 200:
             ctype = tr.headers.get("content-type", "audio/wav")
@@ -379,19 +349,77 @@ async def _voice_process(nickname: str, audio_path: str, history: list):
             tts_data_url = f"data:{mime};base64,{_b64.b64encode(tr.content).decode('ascii')}"
     except httpx.HTTPError as e:
         print(f"❌ tts 에러: {e}")
-    return history, tts_path, tts_data_url
+    return tts_path, tts_data_url
+
+
+async def _voice_process(nickname: str, audio_path: str, history: list):
+    """오디오 파일 → /voice-chat 전사·응답 → 대화기록 + TTS. (history, tts_path, tts_url, ended)."""
+    history = history or []
+    if nickname not in user_sessions:
+        await call_api("/profile", "POST", {"nickname": nickname})
+        user_sessions[nickname] = {"started_at": datetime.now().isoformat()}
+
+    headers = BASE_HEADERS
+    transcript, response, ended = "", "", False
+    try:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT, headers=headers) as client:
+            with open(audio_path, "rb") as f:
+                files = {"audio": (os.path.basename(audio_path), f, "audio/wav")}
+                resp = await client.post(
+                    f"{BACKEND_URL}/voice-chat", files=files, data={"nickname": nickname}
+                )
+            if resp.status_code == 200:
+                j = resp.json()
+                transcript = (j.get("transcript") or "").strip()
+                response = (j.get("response") or "").strip()
+                ended = bool(j.get("conversation_ended", False))
+            else:
+                response = "죄송해요, 음성 처리 중 오류가 났어요. 다시 말씀해 주세요."
+    except httpx.HTTPError as e:
+        print(f"❌ voice-chat 에러: {type(e).__name__}: {e}")
+        response = f"[음성 오류] {type(e).__name__}: {str(e)[:140]}"
+
+    if not transcript:
+        history.append({"role": "assistant", "content": response or "잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?"})
+        return history, None, "", False
+
+    history.append({"role": "user", "content": f"🎤 {transcript}"})
+    history.append({"role": "assistant", "content": response})
+
+    tts_path, tts_data_url = await _synth_tts(response)
+    return history, tts_path, tts_data_url, ended
+
+
+def _ctrl_signal(ended: bool) -> str:
+    """핸즈프리 종료 신호 토큰. JS(#hf_ctrl 폴링)가 감지해 마이크를 끈다."""
+    import time as _t
+    return f"end:{_t.time():.3f}" if ended else ""
 
 
 async def voice_chat_fn(nickname: str, audio_path, history: list):
-    """press-to-talk 마이크(파일경로) 입구. 반환: (history, voice_reply, voice_input, tts_player)"""
+    """press-to-talk 마이크(파일경로) 입구. 반환: (history, voice_reply, voice_input, tts_player, hf_ctrl)"""
     if not nickname or not nickname.strip():
         history = history or []
         history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
-        return history, None, None, gr.update()
+        return history, None, None, gr.update(), gr.update()
     if not audio_path:
-        return history or [], None, None, gr.update()
-    history, tts_path, tts_url = await _voice_process(nickname, audio_path, history)
-    return history, tts_path, None, tts_url
+        return history or [], None, None, gr.update(), gr.update()
+    history, tts_path, tts_url, ended = await _voice_process(nickname, audio_path, history)
+    return history, tts_path, None, tts_url, _ctrl_signal(ended)
+
+
+async def end_conversation_fn(nickname: str, history: list):
+    """수동 '대화 종료' 버튼: 백엔드 종료 경로로 마무리 멘트 생성 + TTS. (history, tts_player, hf_ctrl)"""
+    history = history or []
+    if not nickname or not nickname.strip():
+        return history, gr.update(), gr.update()
+    res = await call_api("/chat", "POST", {"nickname": nickname, "message": "이제 그만하겠습니다"})
+    response = res.get("response") if isinstance(res, dict) else None
+    if not response:
+        response = "네, 오늘 이야기는 여기까지 하겠습니다. 함께 이야기 나눠서 즐거웠어요. 다음에 또 뵙겠습니다. 건강하세요! 🙏"
+    history.append({"role": "assistant", "content": response})
+    _tts_path, tts_url = await _synth_tts(response)
+    return history, tts_url, _ctrl_signal(True)
 
 
 _last_b64_hash: Optional[str] = None
@@ -407,9 +435,9 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
     import time as _time
 
     # 빈 입력은 출력 리셋으로 인한 spurious 재호출 — 어떤 컴포넌트도 건드리지 않는다.
-    # 반환 순서: (history, voice_reply, vad_b64, tts_player)
+    # 반환 순서: (history, voice_reply, vad_b64, tts_player, hf_ctrl)
     if not audio_b64:
-        return gr.update(), gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
     # Lock 으로 dedupe 윈도우의 race 를 없앤다 (Gradio queue가 같은 이벤트를 동시에 두 번 보낼 때 보호).
     if _voice_lock is None:
@@ -420,34 +448,35 @@ async def voice_chat_b64_fn(nickname: str, audio_b64: str, history: list):
         # (a) 같은 b64 가 30초 안에 또 들어오면 같은 발화의 중복 — 무시
         if h == _last_b64_hash and (now - _last_b64_at) < 30:
             print(f"⏭️ 중복 audio_b64 무시 — same hash (h={h[:8]} dt={now - _last_b64_at:.1f}s)")
-            return gr.update(), gr.update(), gr.update(), gr.update()
+            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
         # (b) 직전 처리 후 20초 안에 어떤 audio_b64든 또 들어오면 너무 빠른 재진입 — 무시
         #     (응답 TTS 가 스피커→마이크 echo 로 다시 잡혀 트리거되는 self-loop 차단.
         #      실측: 첫 응답 13.7s + TTS ~10s 후 ~17s 시점에 두 번째 호출이 들어오는 패턴 관찰됨)
         if (now - _last_b64_at) < 20:
             print(f"⏭️ 20초 내 재진입 무시 — diff hash but too soon (dt={now - _last_b64_at:.1f}s)")
-            return gr.update(), gr.update(), gr.update(), gr.update()
+            return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
         _last_b64_hash = h
         _last_b64_at = now
 
     if not nickname or not nickname.strip():
         history = history or []
         history.append({"role": "assistant", "content": "닉네임을 먼저 입력하고 시작해 주세요."})
-        return history, gr.update(), gr.update(), gr.update()
+        return history, gr.update(), gr.update(), gr.update(), gr.update()
     import base64
     raw = base64.b64decode(audio_b64.split(",")[-1])
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         tf.write(raw)
         path = tf.name
     try:
-        history, tts_path, tts_url = await _voice_process(nickname, path, history)
+        history, tts_path, tts_url, ended = await _voice_process(nickname, path, history)
     finally:
         try:
             os.remove(path)
         except OSError:
             pass
     # vad_b64는 gr.update() 로 둔다. tts_player 에 data URL 을 넣어 JS 가 직접 재생.
-    return history, tts_path, gr.update(), tts_url
+    # 종료 의도였다면 hf_ctrl 에 신호를 실어 JS 가 마이크를 끄게 한다.
+    return history, tts_path, gr.update(), tts_url, _ctrl_signal(ended)
 
 
 async def on_nickname_submit(nickname: str) -> tuple[str, str]:
@@ -609,6 +638,16 @@ HANDSFREE_INIT_JS = """
       clearTimeout(window.__hfStatusFailsafe);
       window.__hfStatusFailsafe = null;
     }
+    // 대화 종료 신호가 있으면 마이크를 재개하지 않고 완전히 끈다.
+    if (window.__hfEndRequested) {
+      window.__hfEndRequested = false;
+      window.__hfActive = false;
+      if (window.__hfVAD) { try { window.__hfVAD.pause(); } catch (_) {} }
+      window.__hfStatus('✅ 대화가 종료되었습니다. 다시 시작하려면 버튼을 누르세요.');
+      window.__hfIgnoreVAD = false;
+      window.__hfResetPending = false;
+      return;
+    }
     if (window.__hfResetPending) return;  // 이미 reset 진행 중이면 중복 안 함
     window.__hfResetPending = true;
     if (!window.__hfActive) {
@@ -669,6 +708,18 @@ HANDSFREE_INIT_JS = """
         window.__hfPlayTTS(v);
       }
     }, 300);
+    // hidden #hf_ctrl 의 "end:<ts>" 신호를 폴링 → 마무리 멘트 재생 후 마이크 종료.
+    setInterval(() => {
+      const el = document.querySelector('#hf_ctrl textarea') || document.querySelector('#hf_ctrl input');
+      if (!el) return;
+      const v = el.value || '';
+      if (!v || v === window.__hfLastCtrl) return;
+      window.__hfLastCtrl = v;
+      if (v.indexOf('end') === 0) {
+        console.log('[hf ctrl] 종료 신호 — 마무리 후 마이크 종료');
+        window.__hfEndRequested = true;
+      }
+    }, 300);
   };
   window.hfToggle = async () => {
     try {
@@ -691,9 +742,20 @@ HANDSFREE_INIT_JS = """
           negativeSpeechThreshold: 0.35,
           minSpeechFrames: 3,
           redemptionFrames: 24,
-          onSpeechStart: () => { console.log('[VAD] speech start'); window.__hfStatus('🗣️ 말하는 중…'); },
-          onVADMisfire: () => { console.log('[VAD] misfire(너무 짧음)'); window.__hfStatus('🎧 듣는 중… (조금 더 또렷이 말씀해 주세요)'); },
+          onSpeechStart: () => {
+            console.log('[VAD] speech start'); window.__hfStatus('🗣️ 말하는 중…');
+            // 긴 발화 안정화: 한 발화가 25s 넘게 이어지면 잠깐 쉬어가도록 안내(백엔드는 30s에서 절단).
+            if (window.__hfLongSpeechTimer) clearTimeout(window.__hfLongSpeechTimer);
+            window.__hfLongSpeechTimer = setTimeout(() => {
+              window.__hfStatus('🗣️ 말하는 중… (문장을 마치고 잠깐 쉬시면 더 잘 알아들어요)');
+            }, 25000);
+          },
+          onVADMisfire: () => {
+            console.log('[VAD] misfire(너무 짧음)'); window.__hfStatus('🎧 듣는 중… (조금 더 또렷이 말씀해 주세요)');
+            if (window.__hfLongSpeechTimer) { clearTimeout(window.__hfLongSpeechTimer); window.__hfLongSpeechTimer = null; }
+          },
           onSpeechEnd: (audio) => {
+            if (window.__hfLongSpeechTimer) { clearTimeout(window.__hfLongSpeechTimer); window.__hfLongSpeechTimer = null; }
             // 처리/재생 중에는 어떤 VAD 콜백도 무시 — pause()로 라이브러리가 안 멈춰질 때를 대비한 강한 가드.
             if (window.__hfIgnoreVAD) {
               console.log('[VAD] __hfIgnoreVAD 가드 — speech-end 무시');
@@ -746,7 +808,7 @@ HANDSFREE_INIT_JS = """
 """
 
 
-with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64, #tts_player {display: none !important;}") as demo:
+with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64, #tts_player, #hf_ctrl {display: none !important;}") as demo:
     
     with gr.Row():
         with gr.Column(scale=4):
@@ -815,6 +877,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
             # 음성 대화 (텍스트와 병행)
             with gr.Row():
                 handsfree_btn = gr.Button("🎤 음성 대화 시작 / 중지", variant="secondary")
+                end_btn = gr.Button("🛑 대화 종료", variant="stop")
                 handsfree_status = gr.Markdown("", elem_id="handsfree_status")
             with gr.Accordion("🎤 또는 눌러서 말하기 (수동)", open=False):
                 voice_input = gr.Audio(
@@ -833,6 +896,8 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
             vad_b64 = gr.Textbox(elem_id="vad_b64")
             # TTS data URL 전달용 hidden textbox — JS 가 폴링해 new Audio() 로 재생/종료감지.
             tts_player = gr.Textbox(elem_id="tts_player")
+            # 핸즈프리 제어 신호 — "end:<ts>" 가 실리면 JS 가 마이크(VAD)를 끈다.
+            hf_ctrl = gr.Textbox(elem_id="hf_ctrl")
         
         # 일과 탭
         with gr.TabItem("📅 일과 관리"):
@@ -1042,7 +1107,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
     voice_input.stop_recording(
         fn=voice_chat_fn,
         inputs=[nickname_input, voice_input, chatbot],
-        outputs=[chatbot, voice_reply, voice_input, tts_player],
+        outputs=[chatbot, voice_reply, voice_input, tts_player, hf_ctrl],
         api_name=False,
     )
 
@@ -1051,7 +1116,16 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
     vad_b64.change(
         fn=voice_chat_b64_fn,
         inputs=[nickname_input, vad_b64, chatbot],
-        outputs=[chatbot, voice_reply, vad_b64, tts_player],
+        outputs=[chatbot, voice_reply, vad_b64, tts_player, hf_ctrl],
+        api_name=False,
+    )
+
+    # 대화 종료: 즉시 마이크를 끄고(JS), 백엔드 종료 경로로 마무리 멘트 + TTS 재생
+    end_btn.click(
+        fn=end_conversation_fn,
+        inputs=[nickname_input, chatbot],
+        outputs=[chatbot, tts_player, hf_ctrl],
+        js="() => { window.__hfEndRequested = true; if (window.__hfActive && window.hfToggle) { window.hfToggle(); } }",
         api_name=False,
     )
     # 페이지 로드 시 핸즈프리 JS 초기화

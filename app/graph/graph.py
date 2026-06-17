@@ -4,7 +4,8 @@ LangGraph 대화 그래프 정의
 
 흐름:
   START → preprocess → classify_intent → [분기]
-    → BLOCKED        → blocked → END
+    → BLOCKED          → blocked → END
+    → END_CONVERSATION → end_conversation → save → END
     → GENERAL_CHAT   → generate_response → save → END
     → HEALTH_CONSULT → retrieve → generate_response → save → END
     → FOLLOWUP       → retrieve → generate_response → save → END
@@ -25,6 +26,7 @@ from app.graph.nodes import (
     retrieve_node,
     emergency_node,
     blocked_node,
+    end_conversation_node,
     generate_response_node,
     save_conversation_node,
 )
@@ -39,6 +41,8 @@ def _route_by_intent(state: ConversationState) -> str:
 
     if intent == Intent.BLOCKED:
         return "blocked"
+    elif intent == Intent.END_CONVERSATION:
+        return "end_conversation"
     elif intent == Intent.EMERGENCY:
         return "emergency"
     elif intent == Intent.GENERAL_CHAT:
@@ -60,6 +64,7 @@ def build_conversation_graph() -> StateGraph:
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("emergency", emergency_node)
     graph.add_node("blocked", blocked_node)
+    graph.add_node("end_conversation", end_conversation_node)
     graph.add_node("generate_response", generate_response_node)
     graph.add_node("save_conversation", save_conversation_node)
 
@@ -75,6 +80,7 @@ def build_conversation_graph() -> StateGraph:
         _route_by_intent,
         {
             "blocked": "blocked",
+            "end_conversation": "end_conversation",
             "emergency": "emergency",
             "general": "generate_response",
             "needs_retrieval": "retrieve",
@@ -83,6 +89,9 @@ def build_conversation_graph() -> StateGraph:
 
     # blocked → END (대화 저장 없이 바로 종료)
     graph.add_edge("blocked", END)
+
+    # end_conversation → save_conversation (마무리 멘트도 기록) → END
+    graph.add_edge("end_conversation", "save_conversation")
 
     # emergency → retrieve → generate_response
     graph.add_edge("emergency", "retrieve")

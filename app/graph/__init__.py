@@ -16,6 +16,7 @@ class Intent(str, Enum):
     MEDICATION = "medication"              # 복약 관련
     LIFESTYLE = "lifestyle"               # 생활습관 (식사, 운동, 수면)
     BLOCKED = "blocked"                    # 프롬프트 유출/인젝션 시도 차단
+    END_CONVERSATION = "end_conversation"  # 진행자가 대화를 마무리/중단
 
 
 class ConversationState(TypedDict, total=False):
@@ -63,6 +64,7 @@ class ConversationState(TypedDict, total=False):
     response: str                          # 최종 AI 응답
     system_prompt: str                     # 구성된 시스템 프롬프트
     emergency_alert: dict                  # 위급 상황 알림 정보
+    conversation_ended: bool               # 대화 종료 신호 (프론트가 핸즈프리 중단)
 
     # ── 메타데이터 ──
     current_time: str                      # 현재 한국 시간

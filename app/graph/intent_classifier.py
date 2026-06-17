@@ -26,6 +26,22 @@ PROMPT_LEAK_KEYWORDS = [
     "이전 지시를 무시", "규칙을 무시", "규칙을 어겨",
 ]
 
+# ── 대화 종료 패턴 (진행자가 대화를 마무리) ──
+# 단체 진행 환경에서 진행자가 "여기까지 하자"처럼 말하면 챗봇이 마무리하고 멈추도록.
+# 일상 표현과 겹치지 않도록 '종료 의도'가 분명한 구(phrase) 단위로만 매칭한다.
+END_CONVERSATION_PATTERNS = [
+    r"(여기까지|이만|그만)\s*(하자|할게|하겠|하죠|합시다|하시죠)",
+    r"대화\s*(그만|끝|종료|마치|마무리)",
+    r"(오늘은|이제)\s*(그만|끝|여기까지|마무리)",
+    r"(그만|끝|종료)\s*(할래|하고 싶|하자|해줘|해 줘|하겠)",
+    r"(대화를|얘기를|이야기를)\s*(끝|마치|마무리|종료)",
+    r"(끝내자|끝낼게|끝내겠|마칠게|마치자|마무리하자|종료할게)",
+    r"(이제\s*)?(그만\s*)?(말|얘기|이야기)\s*(그만|끝|안 할|안할)",
+    r"(다음에|나중에)\s*(또|다시)\s*(얘기|이야기|봐요|만나|하자)",
+    r"^(그만|끝|종료|바이)[\s!.~]*$",  # "그만"만 단독으로 말한 경우 (그만 좀 아프면 등 제외)
+    r"^(잘 있어|수고했|수고하셨|고생했|고생하셨)",
+]
+
 # ── 응급 키워드 (최우선 매칭) ──
 EMERGENCY_KEYWORDS = [
     "쓰러", "의식", "호흡", "숨을 못", "숨이 안",
@@ -123,11 +139,17 @@ def classify_intent(
         logger.warning(f"🚫 프롬프트 유출 시도 감지: {msg[:50]}")
         return Intent.BLOCKED, 1.0
 
-    # ── 1단계: 응급 상황 체크 (최우선) ──
+    # ── 1단계: 응급 상황 체크 (최우선 — 안전이 종료보다 우선) ──
     emergency_hits = [kw for kw in EMERGENCY_KEYWORDS if kw in msg_lower]
     if emergency_hits:
         logger.warning(f"🚨 응급 키워드 감지: {emergency_hits}")
         return Intent.EMERGENCY, 0.95
+
+    # ── 1.5단계: 대화 종료 의도 체크 (응급 다음 우선순위) ──
+    for pattern in END_CONVERSATION_PATTERNS:
+        if re.search(pattern, msg):
+            logger.info(f"👋 대화 종료 의도 감지: {msg[:30]}")
+            return Intent.END_CONVERSATION, 0.9
 
     # ── 2단계: 일반 대화 체크 (인사/감정 — followup보다 우선) ──
     for pattern in GENERAL_CHAT_PATTERNS:
