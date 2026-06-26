@@ -324,6 +324,16 @@ async def generate_response_node(state: ConversationState) -> dict:
             risk_terms=", ".join(terms[:5]),
         )
 
+    # ── 전문가 검토(2026-06) 공통 지침 — 응급 외 모든 인텐트에 항상 적용 ──
+    if intent != Intent.EMERGENCY:
+        system_prompt += prompts.EXPERT_GUIDANCE_ADDENDUM
+
+    # ── 정서·관계 위험 신호 감지 시: 조언 금지, 공감 + 탐색 우선 ──
+    from app.graph.intent_classifier import detect_emotional_risk
+    if intent != Intent.EMERGENCY and detect_emotional_risk(message):
+        system_prompt += prompts.EMOTIONAL_EXPLORE_ADDENDUM
+        logger.info("🫂 정서 위험 신호 감지 → EMOTIONAL_EXPLORE addendum 적용")
+
     # ── L4: 응답 다양성 주입 (호출마다 예시·변주 지침 회전, 응급 제외) ──
     if intent != Intent.EMERGENCY:
         intent_value = intent.value if isinstance(intent, Intent) else str(intent)

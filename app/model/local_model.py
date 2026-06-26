@@ -97,7 +97,7 @@ class OllamaClient:
             "options": {
                 "temperature": temperature or settings.LLM_TEMPERATURE,
                 "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
-                "repeat_penalty": 1.3,  # 반복 방지 (파인튜닝 모델 과적합 보완)
+                "repeat_penalty": 1.5,  # 반복 방지 강화 (전문가 검토: '동경님께서…' 두 번 반복 등 차단)
                 "top_p": 0.9,
                 "top_k": 40,
                 # ChatML/특수 토큰 새는 것 방지 — 2.1B 모델이 <|im_end|>·<|email_address|>
