@@ -29,7 +29,6 @@ def rebuild_pgvector_db():
         return
     
     logger.info(f"DB 연결: {db_url[:40]}...")
-    logger.info(f"USE_LANGCHAIN_STORE: {settings.USE_LANGCHAIN_STORE}")
     
     # 2) LangChain 스토어 초기화
     from app.langchain_store import LangChainDataStore
