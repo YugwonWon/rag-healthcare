@@ -26,16 +26,26 @@ let endRequested = false;
 const audioQueue = [];
 let isPlaying = false;
 
+// 같은 AI 턴의 문장들을 풍선 하나에 이어붙이기 위한 참조.
+// 사용자 발화(새 턴)가 들어오면 null로 리셋해 다음 AI 문장은 새 풍선부터 시작한다.
+let currentAiBubble = null;
+
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
 function appendBubble(role, text) {
+  if (role === 'ai' && currentAiBubble) {
+    currentAiBubble.textContent += ' ' + text;
+    chatEl.scrollTop = chatEl.scrollHeight;
+    return;
+  }
   const div = document.createElement('div');
   div.className = 'bubble ' + role;
   div.textContent = text;
   chatEl.appendChild(div);
   chatEl.scrollTop = chatEl.scrollHeight;
+  currentAiBubble = role === 'ai' ? div : null;
 }
 
 function loadScript(src) {
@@ -90,6 +100,7 @@ function connectWS() {
     } else if (msg.type === 'text_chunk') {
       appendBubble('ai', msg.text);
     } else if (msg.type === 'done') {
+      currentAiBubble = null; // 턴 종료 — 다음 AI 문장은 새 풍선부터
       if (msg.conversation_ended) {
         endRequested = true;
       }
