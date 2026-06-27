@@ -580,11 +580,16 @@ class LangChainDataStore:
     # 프로필 관리 (직접 SQL)
     # ==========================================
     
-    async def save_profile(self, nickname: str, profile: dict) -> bool:
-        """프로필 저장/업데이트 (Upsert)"""
+    async def save_profile(self, nickname: str, profile: dict, clear_health_info: bool = False) -> bool:
+        """프로필 저장/업데이트 (Upsert)
+
+        clear_health_info=True면 동의가 명시적으로 철회된 경우다. 일반적으로는
+        COALESCE로 "값을 안 보내면 기존 값 유지"하지만, 이 경우엔 conditions/notes를
+        COALESCE로 보존하지 않고 무조건 NULL로 지운다(그냥 None을 보내는 것만으로는
+        COALESCE가 기존 값을 그대로 두기 때문에 별도 플래그가 필요함)."""
         if not self._use_postgres:
             return False
-            
+
         try:
             async with self.get_connection() as conn:
                 await conn.execute("""
@@ -593,9 +598,9 @@ class LangChainDataStore:
                     ON CONFLICT (nickname) DO UPDATE SET
                         name = COALESCE(EXCLUDED.name, profiles.name),
                         age = COALESCE(EXCLUDED.age, profiles.age),
-                        conditions = COALESCE(EXCLUDED.conditions, profiles.conditions),
+                        conditions = CASE WHEN $8 THEN NULL ELSE COALESCE(EXCLUDED.conditions, profiles.conditions) END,
                         emergency_contact = COALESCE(EXCLUDED.emergency_contact, profiles.emergency_contact),
-                        notes = COALESCE(EXCLUDED.notes, profiles.notes),
+                        notes = CASE WHEN $8 THEN NULL ELSE COALESCE(EXCLUDED.notes, profiles.notes) END,
                         health_info_consent = COALESCE(EXCLUDED.health_info_consent, profiles.health_info_consent),
                         updated_at = NOW()
                 """,
@@ -605,9 +610,10 @@ class LangChainDataStore:
                     profile.get("conditions"),
                     profile.get("emergency_contact"),
                     profile.get("notes"),
-                    profile.get("health_info_consent")
+                    profile.get("health_info_consent"),
+                    clear_health_info,
                 )
-                logger.info(f"프로필 저장: {nickname}")
+                logger.info(f"프로필 저장: {nickname}" + (" (건강정보 삭제)" if clear_health_info else ""))
                 return True
         except Exception as e:
             logger.error(f"프로필 저장 오류: {e}")

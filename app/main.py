@@ -691,23 +691,32 @@ async def save_profile(request: PatientProfileRequest):
     환자 프로필 저장 (PostgreSQL)
     """
     try:
+        # 동의를 명시적으로 끈 경우(False), 건강정보(질환·특이사항)는 무조건 비운다.
+        # None(미지정)은 "동의 상태 변경 없음"이라 건강정보를 건드리지 않는다.
+        clear_health_info = request.health_info_consent is False
+
         profile_data = {
             "nickname": request.nickname,
             "name": request.name,
             "age": request.age,
-            "conditions": request.conditions,
+            "conditions": None if clear_health_info else request.conditions,
             "emergency_contact": request.emergency_contact,
-            "notes": request.notes,
+            "notes": None if clear_health_info else request.notes,
             "health_info_consent": request.health_info_consent,
             "updated_at": get_kst_now().isoformat()
         }
-        
-        # None 값 제거
-        profile_data = {k: v for k, v in profile_data.items() if v is not None}
-        
+
+        # None 값 제거 — 단, 건강정보를 지우는 경우엔 conditions/notes의 None을
+        # 그대로 보존해야 store.save_profile()이 실제로 지울 수 있다.
+        keep_none_keys = {"conditions", "notes"} if clear_health_info else set()
+        profile_data = {
+            k: v for k, v in profile_data.items()
+            if v is not None or k in keep_none_keys
+        }
+
         # 스토어 저장 (pgvector)
         store = get_store()
-        success = await store.save_profile(request.nickname, profile_data)
+        success = await store.save_profile(request.nickname, profile_data, clear_health_info=clear_health_info)
         if not success:
             raise Exception("PostgreSQL 저장 실패")
         logger.info(f"프로필 저장 (PostgreSQL): {request.nickname}")
