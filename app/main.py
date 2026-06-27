@@ -8,13 +8,18 @@ import csv
 import io
 import time
 from datetime import datetime
+from pathlib import Path as _Path
 from typing import Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Security, UploadFile, File, Form
+from fastapi import (
+    FastAPI, HTTPException, Depends, Request, Security, UploadFile, File, Form,
+    WebSocket, WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security.api_key import APIKeyHeader
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import settings
@@ -246,12 +251,16 @@ app.add_middleware(
 
 # 클라이언트 API 키 게이트 — CLIENT_API_KEY 설정 시 모든 요청 검증.
 # /health 는 워치독·Render 헬스체크를 위해 항상 통과.
+# /ui, /ws/voice-chat 도 면제 — 신규 저지연 프론트는 브라우저가 백엔드를 직접
+# 호출하므로(same-origin) CLIENT_API_KEY를 JS에 노출할 수 없다. 같은 공개 터널
+# URL은 이미 누구나 접근 가능하고 이 키는 "봇 차단" 수준의 약한 게이트라 새
+# 경로만 면제한다 — /chat·/voice-chat·/admin/* 등 기존 경로의 게이트는 그대로
+# 유지되어 기존 Gradio 트래픽 보호에는 영향 없음.
 @app.middleware("http")
 async def client_api_key_gate(request: Request, call_next):
     if settings.CLIENT_API_KEY:
         path = request.url.path
-        # /health 는 워치독·헬스체크, / 는 루트 ping — 인증 면제
-        if path not in ("/health", "/"):
+        if path not in ("/health", "/") and not path.startswith("/ui"):
             key = request.headers.get("X-API-Key", "")
             if key != settings.CLIENT_API_KEY:
                 from fastapi.responses import JSONResponse
@@ -532,6 +541,106 @@ async def voice_chat(
         "emergency_alert": emergency_alert,
         "conversation_ended": conversation_ended,
     }
+
+
+def _write_bytes_to_tempfile(data: bytes, suffix: str = ".wav") -> str:
+    import tempfile as _tf
+    with _tf.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(data)
+        return f.name
+
+
+@app.websocket("/ws/voice-chat")
+async def ws_voice_chat(websocket: WebSocket, nickname: str):
+    """저지연 음성/텍스트 대화 WebSocket.
+
+    신규 same-origin 프론트(`/ui`) 전용 경로 — 브라우저가 백엔드에 직접 연결해
+    기존 Gradio 경로의 이중 홉(브라우저→Gradio서버→ngrok→백엔드)을 없앤다.
+    문장이 완성되는 즉시 텍스트+음성을 보내 응답 전체를 기다리지 않아도 된다.
+    기존 /chat, /voice-chat, /tts 엔드포인트는 그대로 두며 이 경로는 완전히 추가됨.
+
+    클라이언트→서버:
+      - binary 프레임: 한 발화 전체의 WAV (음성 턴)
+      - text 프레임(JSON): {"type": "text", "text": "..."}  (텍스트 턴)
+    서버→클라이언트(모두 text JSON, 오디오는 바로 뒤따르는 binary 프레임):
+      - {"type": "transcript", "text": "..."}       (음성 턴만, STT 끝나는 즉시)
+      - {"type": "text_chunk", "text": "...", "has_audio": bool}  (+ binary WAV)
+      - {"type": "done", "conversation_ended": bool}
+      - {"type": "error", "detail": "..."}
+    """
+    await websocket.accept()
+    if not settings.VOICE_ENABLED:
+        await websocket.send_json({"type": "error", "detail": "음성 기능이 비활성화되어 있습니다."})
+        await websocket.close()
+        return
+
+    import os as _os
+    from app.voice import stt as voice_stt
+    from app.voice.streaming_chat import stream_voice_turn
+
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+
+            message_text: Optional[str] = None
+            if msg.get("bytes") is not None:
+                path = _write_bytes_to_tempfile(msg["bytes"])
+                try:
+                    transcript = voice_stt.transcribe(path)
+                except Exception as e:
+                    logger.error(f"WS 음성 전사 오류: {e}", exc_info=True)
+                    await websocket.send_json({"type": "error", "detail": f"음성 전사 오류: {e}"})
+                    continue
+                finally:
+                    try:
+                        _os.remove(path)
+                    except OSError:
+                        pass
+                if not transcript:
+                    await websocket.send_json({
+                        "type": "text_chunk",
+                        "text": "죄송해요, 잘 못 들었어요. 다시 한 번 말씀해 주시겠어요?",
+                        "has_audio": False,
+                    })
+                    await websocket.send_json({"type": "done", "conversation_ended": False})
+                    continue
+                await websocket.send_json({"type": "transcript", "text": transcript})
+                message_text = transcript
+            elif msg.get("text") is not None:
+                import json as _json
+                try:
+                    payload = _json.loads(msg["text"])
+                    message_text = payload.get("text", "")
+                except (ValueError, AttributeError):
+                    message_text = None
+
+            if not message_text:
+                continue
+
+            try:
+                async for chunk in stream_voice_turn(nickname, message_text):
+                    if chunk["type"] == "text_chunk":
+                        audio = chunk.get("audio")
+                        await websocket.send_json({
+                            "type": "text_chunk",
+                            "text": chunk["text"],
+                            "has_audio": audio is not None,
+                        })
+                        if audio:
+                            await websocket.send_bytes(audio)
+                    elif chunk["type"] == "done":
+                        await websocket.send_json({
+                            "type": "done",
+                            "conversation_ended": chunk.get("conversation_ended", False),
+                        })
+            except Exception as e:
+                logger.error(f"WS 대화 처리 오류: {e}", exc_info=True)
+                await websocket.send_json({"type": "error", "detail": f"대화 처리 오류: {e}"})
+
+    except WebSocketDisconnect:
+        logger.info(f"WS 음성 대화 연결 종료 | nickname={nickname}")
 
 
 @app.post("/greeting", response_model=GreetingResponse)
@@ -831,6 +940,14 @@ async def get_routine_status(nickname: str):
         "daily_summary": summary,
         "suggestions": suggestions
     }
+
+
+# 신규 저지연 프론트(/ui) 정적 서빙 — same-origin이라 CORS/이중 홉 없음.
+# 모든 API 라우트 정의 뒤에 마운트(경로가 겹치지 않아 순서 자체는 안전하지만,
+# 명시적으로 라우트들과 분리해 둔다). 기존 "/" 라우트(root)와는 별도 경로.
+_web_dir = _Path(__file__).resolve().parent.parent / "web"
+if _web_dir.is_dir():
+    app.mount("/ui", StaticFiles(directory=str(_web_dir), html=True), name="ui")
 
 
 if __name__ == "__main__":

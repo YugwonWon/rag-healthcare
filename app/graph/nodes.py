@@ -247,15 +247,18 @@ def end_conversation_node(state: ConversationState) -> dict:
 # 노드 7: LLM 응답 생성
 # ============================================================
 
-async def generate_response_node(state: ConversationState) -> dict:
-    """인텐트별 프롬프트 선택 + LLM 호출
+def build_system_prompt(state: ConversationState) -> tuple[str, bool]:
+    """인텐트별 시스템 프롬프트를 조립한다 (템플릿 선택 + 모든 조건부 addendum).
 
-    2.1B 소형 모델에 맞게 인텐트별로 분리된 짧은 프롬프트를 사용한다.
-    음성 기반 챗봇에 적합한 1~3문장 응답을 유도한다.
+    generate_response_node와 스트리밍 경로(app/voice/streaming_chat.py)가
+    동일 로직을 공유하도록 LLM 호출과 분리해 순수 함수로 둔다.
+
+    Returns:
+        (system_prompt, medical_referral_given) — medical_referral_given은
+        이번 턴에 새로 안내했는지 여부(state 갱신용).
     """
     intent = state.get("intent", Intent.GENERAL_CHAT)
     message = state["message"]
-    nickname = state["nickname"]
 
     # 공통 컨텍스트 변수
     current_time = state.get("current_time", "")
@@ -338,6 +341,21 @@ async def generate_response_node(state: ConversationState) -> dict:
     if intent != Intent.EMERGENCY:
         intent_value = intent.value if isinstance(intent, Intent) else str(intent)
         system_prompt += prompts.build_style_addendum(intent_value)
+
+    return system_prompt, medical_referral_given
+
+
+async def generate_response_node(state: ConversationState) -> dict:
+    """인텐트별 프롬프트 선택 + LLM 호출
+
+    2.1B 소형 모델에 맞게 인텐트별로 분리된 짧은 프롬프트를 사용한다.
+    음성 기반 챗봇에 적합한 1~3문장 응답을 유도한다.
+    """
+    intent = state.get("intent", Intent.GENERAL_CHAT)
+    message = state["message"]
+    turn_count = state.get("turn_count", 0)
+
+    system_prompt, medical_referral_given = build_system_prompt(state)
 
     # LLM 호출
     llm = get_llm()

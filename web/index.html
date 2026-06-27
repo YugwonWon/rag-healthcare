@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>치매케어 음성 대화 (실험)</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <div id="start-screen" class="screen">
+    <h1>치매케어 음성 대화</h1>
+    <p class="hint">저지연 실험용 화면입니다. 닉네임만 입력하면 시작해요.</p>
+    <input id="nickname" type="text" placeholder="닉네임을 입력하세요" />
+    <button id="start-btn">시작하기</button>
+  </div>
+
+  <div id="chat-screen" class="screen chat-screen" style="display:none;">
+    <div id="status" class="status">대기 중</div>
+    <div id="chat" class="chat"></div>
+    <div class="controls">
+      <button id="mic-btn" class="mic-btn">🎤 음성 대화 시작</button>
+      <div class="text-row">
+        <input id="text-input" type="text" placeholder="또는 텍스트로 입력하세요" />
+        <button id="send-btn">보내기</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

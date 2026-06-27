@@ -4,7 +4,8 @@
 """
 
 import asyncio
-from typing import Optional
+import json
+from typing import AsyncIterator, Optional
 import httpx
 import numpy as np
 
@@ -70,6 +71,25 @@ class OllamaClient:
         
         return response.json()["response"]
     
+    @staticmethod
+    def _build_chat_options(temperature: Optional[float], max_tokens: Optional[int]) -> dict:
+        """chat()/chat_stream() 공통 옵션 (반복 방지·특수 토큰 차단 동일하게 적용)."""
+        return {
+            "temperature": temperature or settings.LLM_TEMPERATURE,
+            "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
+            "repeat_penalty": 1.5,  # 반복 방지 강화 (전문가 검토: '동경님께서…' 두 번 반복 등 차단)
+            "top_p": 0.9,
+            "top_k": 40,
+            # ChatML/특수 토큰 새는 것 방지 — 2.1B 모델이 <|im_end|>·<|email_address|>
+            # 등을 뱉고도 계속 생성하던 문제 차단.
+            "stop": [
+                "<|im_end|>", "<|im_start|>", "<|endoftext|>",
+                "<|email_address|>", "<|im_email-end|>", "</s>",
+                # 파이프 2개 변형 — 2.1B 모델이 <||im_end|> 처럼 뱉는 케이스 관찰됨
+                "<||im_end|>", "<||im_start|>", "<||endoftext|>",
+            ],
+        }
+
     async def chat(
         self,
         messages: list[dict],
@@ -79,38 +99,24 @@ class OllamaClient:
     ) -> str:
         """
         채팅 형식 생성
-        
+
         Args:
             messages: 채팅 메시지 리스트
             temperature: 생성 온도
             max_tokens: 최대 토큰 수
-        
+
         Returns:
             생성된 응답
         """
         client = await self._get_client()
-        
+
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": temperature or settings.LLM_TEMPERATURE,
-                "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
-                "repeat_penalty": 1.5,  # 반복 방지 강화 (전문가 검토: '동경님께서…' 두 번 반복 등 차단)
-                "top_p": 0.9,
-                "top_k": 40,
-                # ChatML/특수 토큰 새는 것 방지 — 2.1B 모델이 <|im_end|>·<|email_address|>
-                # 등을 뱉고도 계속 생성하던 문제 차단.
-                "stop": [
-                    "<|im_end|>", "<|im_start|>", "<|endoftext|>",
-                    "<|email_address|>", "<|im_email-end|>", "</s>",
-                    # 파이프 2개 변형 — 2.1B 모델이 <||im_end|> 처럼 뱉는 케이스 관찰됨
-                    "<||im_end|>", "<||im_start|>", "<||endoftext|>",
-                ],
-            }
+            "options": self._build_chat_options(temperature, max_tokens),
         }
-        
+
         try:
             response = await client.post(
                 f"{self.base_url}/api/chat",
@@ -131,7 +137,44 @@ class OllamaClient:
         except httpx.HTTPError as e:
             logger.error(f"Ollama HTTP 에러: {e}")
             return "죄송합니다, 일시적인 오류가 발생했어요. 다시 말씀해 주세요. 🙏"
-    
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> AsyncIterator[str]:
+        """채팅 응답을 토큰 델타 단위로 스트리밍한다 (문장 단위 TTS용).
+
+        Ollama `/api/chat`에 stream:true로 호출하면 NDJSON(줄마다 JSON 객체)이
+        오고, 각 줄의 message.content가 토큰 델타다. done:true 줄에서 종료.
+        chat()과 동일 옵션(repeat_penalty/stop 등)을 써서 품질 차이가 없게 한다.
+        """
+        client = await self._get_client()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": self._build_chat_options(temperature, max_tokens),
+        }
+        try:
+            async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    delta = chunk.get("message", {}).get("content", "")
+                    if delta:
+                        yield delta
+                    if chunk.get("done"):
+                        break
+        except httpx.TimeoutException:
+            logger.error(f"Ollama 스트리밍 타임아웃 ({OLLAMA_TIMEOUT}초 초과)")
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama 스트리밍 HTTP 에러: {e}")
+
     @staticmethod
     def _postprocess_exaone(content: str) -> str:
         """EXAONE 4.0 응답 후처리: think 블록 제거, 아티팩트 정리"""
@@ -279,6 +322,10 @@ class LocalLLM(BaseLLM):
     async def chat(self, messages: list[dict], **kwargs) -> str:
         """채팅 형식 생성"""
         return await self.client.chat(messages, **kwargs)
+
+    def chat_stream(self, messages: list[dict], **kwargs) -> AsyncIterator[str]:
+        """채팅 응답 토큰 스트리밍 (문장 단위 TTS 파이프라인용)"""
+        return self.client.chat_stream(messages, **kwargs)
     
     async def is_available(self) -> bool:
         """모델 사용 가능 여부"""
