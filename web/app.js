@@ -240,7 +240,7 @@ function enqueueAudio(buf) {
   playNextInQueue();
 }
 
-function playNextInQueue() {
+async function playNextInQueue() {
   if (isPlaying || audioQueue.length === 0) return;
   isPlaying = true;
   const buf = audioQueue.shift();
@@ -250,8 +250,18 @@ function playNextInQueue() {
   if (vad) { try { vad.pause(); } catch (_) {} }
   setStatus('🔊 답변 재생 중… (마이크 일시정지)');
   micBtn.classList.add('speaking');
-  attachPlaybackAnalyser(audio);
-  startOrbLoop();
+
+  // 모바일에서 AudioContext가 다시 suspended로 빠지면, 분석용으로 그래프에
+  // 연결된 <audio>가 무음이 되는 문제가 있었다(모바일에서 음성이 안 들리는
+  // 버그, 2026-06). 재생마다 미리 resume을 시도하고, 그래도 running이 아니면
+  // 분석 연결 자체를 건너뛰어 일반 재생(소리는 반드시 남)으로 폴백한다.
+  await ensureAudioContext();
+  if (audioCtx && audioCtx.state === 'running') {
+    attachPlaybackAnalyser(audio);
+    startOrbLoop();
+  } else {
+    console.warn('[orb] AudioContext 상태가 running이 아님(' + (audioCtx && audioCtx.state) + ') — 이번 클립은 분석 없이 일반 재생');
+  }
 
   const cleanup = () => {
     URL.revokeObjectURL(url);
@@ -371,9 +381,12 @@ async function toggleMic() {
   setStatus('🎤 마이크 준비 중…');
   try {
     await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume — 이후 TTS 재생도 이 컨텍스트를 씀
-    await initVAD(); // 여기서 getStream이 호출되며 micStream이 채워짐
-    await setupMicAnalyser(); // 그 micStream을 재사용(별도 getUserMedia 호출 없음)
+    await initVAD();
+    // getStream은 new() 시점이 아니라 start()가 실제로 마이크를 잡을 때 호출되는
+    // 듯하다(이 순서가 아니면 micStream이 아직 비어 있어 듣는중 오브가 진폭에
+    // 반응하지 않는 버그가 있었음) — start() 이후에 호출해야 micStream이 채워짐.
     await vad.start();
+    await setupMicAnalyser(); // 이제 채워진 micStream을 재사용(별도 getUserMedia 없음)
     active = true;
     setStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
     micLabel.textContent = '음성 대화 중지';

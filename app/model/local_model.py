@@ -87,12 +87,18 @@ class OllamaClient:
                 "<|email_address|>", "<|im_email-end|>", "</s>",
                 # 파이프 2개 변형 — 2.1B 모델이 <||im_end|> 처럼 뱉는 케이스 관찰됨
                 "<||im_end|>", "<||im_start|>", "<||endoftext|>",
+                # </im_start|, </im_end| 변형 — 슬래시+파이프가 섞인 형태로도
+                # 새는 경우가 관찰됨(2026-06). '<' 다음이 '/'든 '|'든, 끝에 '>'가
+                # 없어도 차단.
+                "</im_end|", "</im_start|", "</endoftext|",
                 # 가상 멀티턴 생성 차단 — 프롬프트의 conversation_history가
                 # "사용자: ...\nAI: ..." 형식이고 RAG로 들어오는 모범응답 예시가
                 # "이용자: ...\n건강상담사: ..." 형식이라, 모델이 그 패턴을 보고
                 # 답 하나만 하면 될 자리에서 가상의 다음 턴들을 계속 만들어내는
-                # 경우가 관찰됨(2026-06). 이 라벨이 나오는 즉시 멈춘다.
+                # 경우가 관찰됨. 한국어 라벨뿐 아니라 ChatML 영어 role 라벨
+                # (user/assistant)로도 새는 케이스가 있어 같이 차단한다.
                 "사용자:", "AI:", "이용자:", "건강상담사:",
+                "\nuser", "\nassistant", "\nsystem",
             ],
         }
 
@@ -199,15 +205,22 @@ class OllamaClient:
         #     <|email_address|> 등. 파이프가 1개든 여러 개든(<||...||>) 모두 제거.
         #     stop 시퀀스가 1차 차단하지만 그래도 새는 경우의 2차 안전망.
         content = re.sub(r"</?\|+[^<>]*?\|+>", "", content)
-        # 닫힘이 불완전한 잔재(<|im_end, <||im_end| 등)도 알려진 토큰명 기준으로 제거.
+        # 닫힘이 불완전하거나(<|im_end, <||im_end|) '<' 다음이 '/'인 변형도
+        # (</im_start|, </im_end|처럼 파이프·꺾쇠 위치가 섞인 케이스, 2026-06
+        # 관찰됨) 알려진 토큰명 기준으로 제거. '<' 다음 슬래시/파이프는 0개 이상.
         content = re.sub(
-            r"<\|+\s*(?:im_end|im_start|endoftext|email_address|im_email-end)\s*\|*>?",
+            r"<[/|]*\s*(?:im_end|im_start|endoftext|email_address|im_email-end)\s*[/|]*>?",
             "", content, flags=re.IGNORECASE,
         )
 
         # 2c) 프롬프트 라벨 누출 제거 — 2.1B 모델이 "가벼운 질문:", "후속 질문:" 같은
         #     지시어 라벨을 응답에 그대로 붙이는 경우(줄 시작·문중 모두). 라벨만 떼고 질문은 살린다.
         content = re.sub(r"(?:가벼운|후속|추가|간단한)?\s*질문\s*[:：]\s*", "", content)
+
+        # 2d) 가상 멀티턴 라벨 잔재 제거 — stop 시퀀스가 보통 막지만, 그 직전까지
+        # 생성된 라벨 단독 줄("user", "사용자:" 등)이 끝에 남는 경우의 2차 안전망.
+        content = re.sub(r"\n\s*(?:user|assistant|system)\s*$", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"\n\s*(?:사용자|AI|이용자|건강상담사)\s*[:：]?\s*$", "", content)
 
         # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
         content = content.strip()
