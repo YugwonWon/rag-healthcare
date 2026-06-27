@@ -13,6 +13,9 @@ const micLabel = document.getElementById('mic-label');
 const textInput = document.getElementById('text-input');
 const sendBtn = document.getElementById('send-btn');
 const typingIndicator = document.getElementById('typing-indicator');
+const voiceModeBtn = document.getElementById('voice-mode-btn');
+const voiceCloseBtn = document.getElementById('voice-close-btn');
+const voiceOverlay = document.getElementById('voice-overlay');
 
 // 탭(대화/프로필/관리자)
 const tabButtons = document.querySelectorAll('.tab-btn');
@@ -142,6 +145,7 @@ function stopOrbLoopIfIdle() {
 
 function setStatus(msg) {
   statusEl.textContent = msg;
+  micLabel.textContent = msg; // 음성 모드 오버레이의 캡션도 같은 상태 문구를 보여줌
 }
 
 function showTyping() {
@@ -291,11 +295,11 @@ function resumeAfterPlayback() {
     endRequested = false;
     active = false;
     if (vad) { try { vad.pause(); } catch (_) {} }
-    setStatus('✅ 대화가 종료되었습니다. 다시 시작하려면 마이크 버튼을 누르세요.');
-    micLabel.textContent = '음성 대화 시작';
+    setStatus('✅ 대화가 종료되었습니다.');
     micBtn.classList.remove('active');
     stopOrbLoopIfIdle();
     ignoreVAD = false;
+    setTimeout(closeVoiceOverlay, 1800); // 마지막 인사를 잠깐 보여준 뒤 자동으로 닫힘
     return;
   }
   if (!active) {
@@ -368,16 +372,16 @@ async function initVAD() {
   }
 }
 
-async function toggleMic() {
-  if (active) {
-    if (vad) vad.pause();
-    active = false;
-    setStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
-    micLabel.textContent = '음성 대화 시작';
-    micBtn.classList.remove('active');
-    stopOrbLoopIfIdle();
-    return;
-  }
+// 채팅 입력줄의 파형 버튼으로 들어오는, ChatGPT/Gemini 스타일 전체화면 음성 모드.
+function openVoiceOverlay() {
+  voiceOverlay.classList.add('open');
+}
+function closeVoiceOverlay() {
+  voiceOverlay.classList.remove('open');
+}
+
+async function enterVoiceMode() {
+  openVoiceOverlay();
   setStatus('🎤 마이크 준비 중…');
   try {
     await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume — 이후 TTS 재생도 이 컨텍스트를 씀
@@ -389,13 +393,21 @@ async function toggleMic() {
     await setupMicAnalyser(); // 이제 채워진 micStream을 재사용(별도 getUserMedia 없음)
     active = true;
     setStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
-    micLabel.textContent = '음성 대화 중지';
     micBtn.classList.add('active');
     startOrbLoop();
   } catch (e) {
     console.error('mic/VAD init error', e);
     setStatus('❌ 마이크/VAD 초기화 실패 — 브라우저 콘솔을 확인하세요');
   }
+}
+
+function exitVoiceMode() {
+  if (vad) { try { vad.pause(); } catch (_) {} }
+  active = false;
+  micBtn.classList.remove('active');
+  stopOrbLoopIfIdle();
+  setStatus('대기 중');
+  closeVoiceOverlay();
 }
 
 function sendText() {
@@ -584,7 +596,8 @@ nicknameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') startChat();
 });
 
-micBtn.addEventListener('click', toggleMic);
+voiceModeBtn.addEventListener('click', enterVoiceMode);
+voiceCloseBtn.addEventListener('click', exitVoiceMode);
 sendBtn.addEventListener('click', sendText);
 textInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendText();

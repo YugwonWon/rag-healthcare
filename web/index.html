@@ -34,19 +34,29 @@
         </div>
       </div>
       <div class="controls">
-        <div class="voice-stage">
-          <button id="mic-btn" class="voice-orb" aria-label="음성 대화 시작/중지">
-            <span class="voice-orb-ring"></span>
-            <span class="voice-orb-swirl"></span>
-            <span class="voice-orb-core"></span>
-            <span class="voice-orb-highlight"></span>
+        <div class="text-row input-row">
+          <input id="text-input" type="text" placeholder="메시지를 입력하세요" />
+          <button id="voice-mode-btn" class="icon-btn" aria-label="음성 대화 시작" title="음성 대화 시작">
+            <span class="wave-icon"><span></span><span></span><span></span><span></span></span>
           </button>
-          <div id="mic-label" class="mic-label">음성 대화 시작</div>
+          <button id="send-btn" class="icon-btn icon-btn-primary" aria-label="보내기" title="보내기">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6 11l6-6 6 6"/></svg>
+          </button>
         </div>
-        <div class="text-row">
-          <input id="text-input" type="text" placeholder="또는 텍스트로 입력하세요" />
-          <button id="send-btn">보내기</button>
-        </div>
+      </div>
+    </div>
+
+    <!-- 음성 모드 전체화면 오버레이 — 채팅 입력줄의 파형 버튼으로 들어오고, X로 나간다. -->
+    <div id="voice-overlay" class="voice-overlay">
+      <button id="voice-close-btn" class="voice-close-btn" aria-label="음성 대화 종료">✕</button>
+      <div class="voice-stage">
+        <button id="mic-btn" class="voice-orb" aria-label="음성 대화 중지">
+          <span class="voice-orb-ring"></span>
+          <span class="voice-orb-swirl"></span>
+          <span class="voice-orb-core"></span>
+          <span class="voice-orb-highlight"></span>
+        </button>
+        <div id="mic-label" class="mic-label">듣는 중…</div>
       </div>
     </div>
 

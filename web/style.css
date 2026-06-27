@@ -370,3 +370,71 @@ button:active { transform: scale(0.97); opacity: 0.92; }
 .text-row { display: flex; gap: 8px; }
 .text-row input { flex: 1; }
 .text-row button { background: var(--primary-grad); }
+
+/* ── 입력줄 아이콘 버튼(파형=음성모드 진입, 화살표=전송) — ChatGPT 입력줄 스타일 ── */
+.input-row { align-items: center; }
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.icon-btn-primary { background: var(--primary-grad); color: white; }
+
+.wave-icon { display: flex; align-items: center; gap: 2.5px; height: 18px; }
+.wave-icon span {
+  width: 2.5px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.wave-icon span:nth-child(1) { height: 45%; }
+.wave-icon span:nth-child(2) { height: 100%; }
+.wave-icon span:nth-child(3) { height: 70%; }
+.wave-icon span:nth-child(4) { height: 30%; }
+
+/* ── 음성 모드 전체화면 오버레이 — 채팅 입력줄에서 파형 버튼으로 진입,
+   X로 나가는 ChatGPT/Gemini 스타일 몰입형 화면. 부드러운 확대+페이드 전환. ── */
+.voice-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 50% 38%, #1c1b2e 0%, #0c0b14 70%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.96);
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              visibility 0.35s;
+  z-index: 50;
+}
+.voice-overlay.open {
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1);
+}
+.voice-overlay .voice-stage { gap: 22px; }
+.voice-overlay .voice-orb { width: 168px; height: 168px; }
+.voice-overlay .mic-label { color: rgba(255, 255, 255, 0.75); font-size: 15px; }
+.voice-close-btn {
+  position: absolute;
+  top: calc(20px + env(safe-area-inset-top));
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  font-size: 16px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
