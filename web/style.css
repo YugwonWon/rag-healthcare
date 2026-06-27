@@ -25,12 +25,14 @@ body {
 #start-screen h1 { font-size: 24px; margin-bottom: 4px; }
 .hint { color: #666; font-size: 14px; margin-bottom: 12px; }
 
-#nickname, #text-input {
+#nickname, #text-input,
+input[type="text"], input[type="number"], input[type="password"], textarea {
   width: 100%;
   padding: 14px;
   font-size: 16px;
   border: 1px solid #ddd;
   border-radius: 10px;
+  font-family: inherit;
 }
 
 button {
@@ -44,7 +46,55 @@ button {
 }
 button:active { background: #5568d3; }
 
-.chat-screen { gap: 12px; }
+.app-screen { gap: 12px; }
+
+.tab-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.tab-btn {
+  flex: 1;
+  padding: 10px 8px;
+  font-size: 14px;
+  background: #eee;
+  color: #555;
+}
+.tab-btn.active { background: #667eea; color: white; }
+
+.tab-panel { display: none; flex: 1; flex-direction: column; gap: 10px; }
+.tab-panel.active { display: flex; }
+#tab-chat.active { display: flex; flex: 1; min-height: 0; }
+
+.field-label { font-size: 13px; color: #555; margin: 4px 0 -4px; }
+.consent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #444;
+  padding: 8px 0;
+}
+.consent-row input { width: auto; }
+
+.form-status { font-size: 13px; color: #555; min-height: 18px; }
+
+.radio-row { display: flex; gap: 16px; font-size: 14px; }
+.radio-row label { display: flex; align-items: center; gap: 4px; }
+.radio-row input { width: auto; }
+
+#admin-table-wrap { overflow-x: auto; max-height: 50vh; overflow-y: auto; }
+.admin-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.admin-table th, .admin-table td {
+  border: 1px solid #e0e0e0;
+  padding: 6px 8px;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-table th { background: #f0f0f0; position: sticky; top: 0; }
 
 .status {
   text-align: center;

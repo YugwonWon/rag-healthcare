@@ -14,14 +14,62 @@
     <button id="start-btn">시작하기</button>
   </div>
 
-  <div id="chat-screen" class="screen chat-screen" style="display:none;">
-    <div id="status" class="status">대기 중</div>
-    <div id="chat" class="chat"></div>
-    <div class="controls">
-      <button id="mic-btn" class="mic-btn">🎤 음성 대화 시작</button>
+  <div id="chat-screen" class="screen app-screen" style="display:none;">
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="chat">💬 대화</button>
+      <button class="tab-btn" data-tab="profile">👤 프로필</button>
+      <button class="tab-btn" data-tab="admin">🔐 관리자</button>
+    </div>
+
+    <div id="tab-chat" class="tab-panel active">
+      <div id="status" class="status">대기 중</div>
+      <div id="chat" class="chat"></div>
+      <div class="controls">
+        <button id="mic-btn" class="mic-btn">🎤 음성 대화 시작</button>
+        <div class="text-row">
+          <input id="text-input" type="text" placeholder="또는 텍스트로 입력하세요" />
+          <button id="send-btn">보내기</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-profile" class="tab-panel">
+      <h2>프로필 설정</h2>
+      <label class="field-label">이름</label>
+      <input id="profile-name" type="text" />
+      <label class="field-label">나이</label>
+      <input id="profile-age" type="number" min="0" max="120" />
+      <label class="consent-row">
+        <input id="profile-consent" type="checkbox" />
+        건강정보 개인화 활용에 동의합니다
+      </label>
+      <label class="field-label">질환·건강상태</label>
+      <textarea id="profile-conditions" rows="2"></textarea>
+      <label class="field-label">비상연락처</label>
+      <input id="profile-emergency" type="text" />
+      <label class="field-label">특이사항</label>
+      <textarea id="profile-notes" rows="2"></textarea>
+      <button id="profile-save-btn">저장</button>
+      <div id="profile-status" class="form-status"></div>
+    </div>
+
+    <div id="tab-admin" class="tab-panel">
+      <h2>관리자 메뉴</h2>
       <div class="text-row">
-        <input id="text-input" type="text" placeholder="또는 텍스트로 입력하세요" />
-        <button id="send-btn">보내기</button>
+        <input id="admin-pw" type="password" placeholder="관리자 비밀번호" />
+        <button id="admin-login-btn">로그인</button>
+      </div>
+      <div id="admin-status" class="form-status"></div>
+      <div id="admin-panel" style="display:none;">
+        <div class="radio-row">
+          <label><input type="radio" name="admin-source" value="history" checked /> 전체 대화 기록</label>
+          <label><input type="radio" name="admin-source" value="logs" /> 분석 로그(메타데이터 포함)</label>
+        </div>
+        <div class="text-row">
+          <button id="admin-view-btn">표로 보기</button>
+          <button id="admin-csv-btn">CSV 다운로드</button>
+        </div>
+        <div id="admin-table-wrap"></div>
       </div>
     </div>
   </div>

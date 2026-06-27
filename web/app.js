@@ -12,6 +12,30 @@ const micBtn = document.getElementById('mic-btn');
 const textInput = document.getElementById('text-input');
 const sendBtn = document.getElementById('send-btn');
 
+// 탭(대화/프로필/관리자)
+const tabButtons = document.querySelectorAll('.tab-btn');
+const tabPanels = document.querySelectorAll('.tab-panel');
+
+// 프로필 탭
+const profileNameInput = document.getElementById('profile-name');
+const profileAgeInput = document.getElementById('profile-age');
+const profileConsentInput = document.getElementById('profile-consent');
+const profileConditionsInput = document.getElementById('profile-conditions');
+const profileEmergencyInput = document.getElementById('profile-emergency');
+const profileNotesInput = document.getElementById('profile-notes');
+const profileSaveBtn = document.getElementById('profile-save-btn');
+const profileStatusEl = document.getElementById('profile-status');
+
+// 관리자 탭
+const adminPwInput = document.getElementById('admin-pw');
+const adminLoginBtn = document.getElementById('admin-login-btn');
+const adminStatusEl = document.getElementById('admin-status');
+const adminPanel = document.getElementById('admin-panel');
+const adminViewBtn = document.getElementById('admin-view-btn');
+const adminCsvBtn = document.getElementById('admin-csv-btn');
+const adminTableWrap = document.getElementById('admin-table-wrap');
+let adminPassword = ''; // 로그인 성공 시 보관해 매 요청마다 재전송(세션/쿠키 없음)
+
 let ws = null;
 let nickname = '';
 let vad = null;
@@ -248,6 +272,164 @@ function sendText() {
   textInput.value = '';
 }
 
+// ── 탭 전환 ──
+function switchTab(name) {
+  tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  tabPanels.forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
+  if (name === 'profile') loadProfile();
+}
+
+// ── 프로필 탭 ──
+// 동의 체크가 꺼져있으면 질환·특이사항 입력란을 잠근다(기존 Gradio toggle_health_fields와 동일).
+function applyConsentGate() {
+  const enabled = profileConsentInput.checked;
+  profileConditionsInput.disabled = !enabled;
+  profileNotesInput.disabled = !enabled;
+}
+
+async function loadProfile() {
+  try {
+    const resp = await fetch(`/profile/${encodeURIComponent(nickname)}`);
+    if (resp.status === 404) { applyConsentGate(); return; } // 신규 사용자 — 빈 폼 유지
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const p = data.profile || {};
+    profileNameInput.value = p.name || '';
+    profileAgeInput.value = p.age || '';
+    profileConsentInput.checked = !!p.health_info_consent;
+    profileConditionsInput.value = p.conditions || '';
+    profileEmergencyInput.value = p.emergency_contact || '';
+    profileNotesInput.value = p.notes || '';
+    applyConsentGate();
+  } catch (e) {
+    console.warn('[profile] 불러오기 실패', e);
+  }
+}
+
+async function saveProfile() {
+  const consent = profileConsentInput.checked;
+  const body = {
+    nickname,
+    name: profileNameInput.value.trim() || null,
+    age: profileAgeInput.value ? parseInt(profileAgeInput.value, 10) : null,
+    emergency_contact: profileEmergencyInput.value.trim() || null,
+    health_info_consent: consent,
+    // 동의하지 않으면 건강정보(질환/특이사항)는 보내지 않음 — 기존 Gradio와 동일 동작.
+    conditions: consent ? (profileConditionsInput.value.trim() || null) : null,
+    notes: consent ? (profileNotesInput.value.trim() || null) : null,
+  };
+  try {
+    const resp = await fetch('/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    profileStatusEl.textContent = `✅ ${nickname}님의 프로필이 저장되었습니다.`;
+  } catch (e) {
+    profileStatusEl.textContent = '❌ 저장 실패: ' + e.message;
+  }
+}
+
+// ── 관리자 탭 ──
+function getAdminSource() {
+  const checked = document.querySelector('input[name="admin-source"]:checked');
+  return checked ? checked.value : 'history';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function renderAdminTable(columns, rows) {
+  if (!columns || columns.length === 0) {
+    adminTableWrap.innerHTML = '<p>표시할 대화 기록이 없습니다.</p>';
+    return;
+  }
+  let html = '<table class="admin-table"><thead><tr>';
+  for (const c of columns) html += `<th>${escapeHtml(c)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    for (const cell of row) html += `<td>${escapeHtml(cell == null ? '' : cell)}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  adminTableWrap.innerHTML = html;
+}
+
+async function adminLogin() {
+  const pw = adminPwInput.value.trim();
+  if (!pw) {
+    setAdminStatus('비밀번호를 입력해주세요.');
+    return;
+  }
+  try {
+    const resp = await fetch('/admin/login', { method: 'POST', headers: { 'X-Admin-Password': pw } });
+    if (resp.status === 200) {
+      adminPassword = pw;
+      adminPanel.style.display = 'block';
+      setAdminStatus('✅ 로그인 성공. 아래에서 대화 기록을 조회/다운로드하세요.');
+    } else if (resp.status === 401) {
+      setAdminStatus('❌ 비밀번호가 올바르지 않습니다.');
+    } else {
+      setAdminStatus(`❌ 로그인 실패 (status ${resp.status})`);
+    }
+  } catch (e) {
+    setAdminStatus('❌ 서버 연결 실패: ' + e.message);
+  }
+}
+
+function setAdminStatus(msg) {
+  adminStatusEl.textContent = msg;
+}
+
+async function adminViewTable() {
+  if (!adminPassword) { setAdminStatus('먼저 로그인해주세요.'); return; }
+  const source = getAdminSource();
+  try {
+    const resp = await fetch(`/admin/conversations.json?source=${source}`, {
+      headers: { 'X-Admin-Password': adminPassword },
+    });
+    if (resp.status === 401) { setAdminStatus('❌ 인증이 만료되었습니다. 다시 로그인해주세요.'); return; }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    renderAdminTable(data.columns, data.rows);
+    const note = data.shown < data.total
+      ? `총 ${data.total}행 중 최근 ${data.shown}행 표시`
+      : `총 ${data.total}행 표시`;
+    setAdminStatus(data.total === 0 ? '표시할 대화 기록이 없습니다.' : '✅ ' + note);
+  } catch (e) {
+    setAdminStatus('❌ 조회 실패: ' + e.message);
+  }
+}
+
+async function adminDownloadCsv() {
+  if (!adminPassword) { setAdminStatus('먼저 로그인해주세요.'); return; }
+  const source = getAdminSource();
+  try {
+    const resp = await fetch(`/admin/conversations.csv?source=${source}`, {
+      headers: { 'X-Admin-Password': adminPassword },
+    });
+    if (resp.status === 401) { setAdminStatus('❌ 인증이 만료되었습니다. 다시 로그인해주세요.'); return; }
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const cd = resp.headers.get('content-disposition') || '';
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    const filename = m ? m[1] : `conversations_${source}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setAdminStatus(`✅ ${filename} 다운로드 완료`);
+  } catch (e) {
+    setAdminStatus('❌ 다운로드 실패: ' + e.message);
+  }
+}
+
 startBtn.addEventListener('click', () => {
   nickname = nicknameInput.value.trim();
   if (!nickname) {
@@ -264,3 +446,10 @@ sendBtn.addEventListener('click', sendText);
 textInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendText();
 });
+
+tabButtons.forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+profileConsentInput.addEventListener('change', applyConsentGate);
+profileSaveBtn.addEventListener('click', saveProfile);
+adminLoginBtn.addEventListener('click', adminLogin);
+adminViewBtn.addEventListener('click', adminViewTable);
+adminCsvBtn.addEventListener('click', adminDownloadCsv);

@@ -87,6 +87,7 @@ class PatientProfileRequest(BaseModel):
     conditions: Optional[str] = None  # 쉼표로 구분된 상태/질환
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    health_info_consent: Optional[bool] = None
 
 
 class DocumentRequest(BaseModel):
@@ -132,6 +133,7 @@ async def lifespan(app: FastAPI):
 
     # 연구·분석용 대화 로그 테이블 보장 (idempotent)
     await store.ensure_analytics_schema()
+    await store.ensure_profile_consent_column()
     
     # pgvector에 문서가 0개이면 healthcare_docs 자동 로드
     try:
@@ -688,6 +690,7 @@ async def save_profile(request: PatientProfileRequest):
             "conditions": request.conditions,
             "emergency_contact": request.emergency_contact,
             "notes": request.notes,
+            "health_info_consent": request.health_info_consent,
             "updated_at": get_kst_now().isoformat()
         }
         
