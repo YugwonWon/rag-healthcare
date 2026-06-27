@@ -60,6 +60,7 @@ let currentAiBubble = null;
 // VAD 내부 스트림을 건드리지 않고, 시각화 전용으로 별도 getUserMedia 스트림을
 // 하나 더 열어 분석한다(VAD 로직과 완전히 분리해 회귀 위험을 낮춤).
 let audioCtx = null;
+let micStream = null; // VAD가 getStream으로 얻은 마이크 스트림 — 오브 분석도 이걸 재사용한다.
 let micAnalyser = null;
 let micAnalyserData = null;
 let playbackAnalyser = null;
@@ -77,12 +78,14 @@ async function ensureAudioContext() {
   return audioCtx;
 }
 
+// getUserMedia를 VAD와 오브 시각화가 각자 따로 호출하면(특히 모바일 Safari에서)
+// 동시 마이크 스트림 두 개가 충돌해 음성 인식이 불안정해지는 문제가 있었다.
+// 그래서 VAD 쪽 옵션(getStream)에서 받아온 스트림을 여기서 그대로 재사용한다.
 async function setupMicAnalyser() {
-  if (micAnalyser) return;
+  if (micAnalyser || !micStream) return;
   try {
     const ctx = await ensureAudioContext();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const source = ctx.createMediaStreamSource(stream);
+    const source = ctx.createMediaStreamSource(micStream);
     micAnalyser = ctx.createAnalyser();
     micAnalyser.fftSize = 256;
     micAnalyserData = new Uint8Array(micAnalyser.frequencyBinCount);
@@ -309,6 +312,14 @@ async function initVAD() {
   }
   if (!vad) {
     vad = await window.vad.MicVAD.new({
+      // getUserMedia를 VAD 안에서 자체적으로 부르게 두면(기본 동작), 오브 진폭
+      // 분석용으로 따로 또 getUserMedia를 부를 때 모바일 Safari에서 두 스트림이
+      // 충돌해 인식이 불안정해졌다. 여기서 한 번만 얻어 micStream에 저장하고
+      // setupMicAnalyser()도 같은 스트림을 재사용한다.
+      getStream: async () => {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        return micStream;
+      },
       baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/',
       onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/',
       positiveSpeechThreshold: 0.5,
@@ -360,8 +371,8 @@ async function toggleMic() {
   setStatus('🎤 마이크 준비 중…');
   try {
     await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume — 이후 TTS 재생도 이 컨텍스트를 씀
-    await setupMicAnalyser();
-    await initVAD();
+    await initVAD(); // 여기서 getStream이 호출되며 micStream이 채워짐
+    await setupMicAnalyser(); // 그 micStream을 재사용(별도 getUserMedia 호출 없음)
     await vad.start();
     active = true;
     setStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
