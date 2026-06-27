@@ -253,19 +253,27 @@ app.add_middleware(
 
 # 클라이언트 API 키 게이트 — CLIENT_API_KEY 설정 시 모든 요청 검증.
 # /health 는 워치독·Render 헬스체크를 위해 항상 통과.
-# /doctor, /ws/voice-chat 도 면제 — 신규 저지연 프론트는 브라우저가 백엔드를 직접
-# 호출하므로(same-origin) CLIENT_API_KEY를 JS에 노출할 수 없다. 같은 공개 터널
-# URL은 이미 누구나 접근 가능하고 이 키는 "봇 차단" 수준의 약한 게이트라 새
-# 경로만 면제한다 — /chat·/voice-chat·/admin/* 등 기존 경로의 게이트는 그대로
-# 유지되어 기존 Gradio 트래픽 보호에는 영향 없음.
+# /doctor, /ws/voice-chat, /profile, /admin도 면제 — 신규 저지연 프론트(/doctor)는
+# 브라우저가 백엔드를 직접 호출하므로(same-origin) CLIENT_API_KEY를 JS에 노출할
+# 수 없다. /profile·/admin은 /doctor의 프로필·관리자 탭이 직접 fetch하는
+# 엔드포인트라 같이 면제한다 — /admin/*은 별도의 진짜 비밀(X-Admin-Password,
+# require_admin_password)로 보호되므로 이 약한 게이트를 빼도 보안이 약해지지
+# 않는다. /profile은 기존에도 닉네임만 알면 누구나 읽고 쓸 수 있던 엔드포인트라
+# (Gradio도 별도 인증 없이 호출) 위협 모델이 바뀌지 않는다. 같은 공개 터널 URL은
+# 이미 누구나 접근 가능하고 이 키는 "봇 차단" 수준의 약한 게이트라 새 경로만
+# 면제한다 — /chat·/voice-chat 등 기존 경로의 게이트는 그대로 유지되어 기존
+# Gradio 트래픽 보호에는 영향 없음.
 # (참고: 정상적인 WS 업그레이드는 scope type이 websocket이라 이 HTTP 미들웨어를
 # 안 타지만, 중간 프록시가 Upgrade 헤더를 빼먹으면 일반 HTTP로 떨어져 이 게이트에
 # 걸릴 수 있다 — /ws도 명시해 방어적으로 막는다.)
+_GATE_EXEMPT_PREFIXES = ("/doctor", "/ws", "/profile", "/admin")
+
+
 @app.middleware("http")
 async def client_api_key_gate(request: Request, call_next):
     if settings.CLIENT_API_KEY:
         path = request.url.path
-        if path not in ("/health", "/") and not path.startswith("/doctor") and not path.startswith("/ws"):
+        if path not in ("/health", "/") and not path.startswith(_GATE_EXEMPT_PREFIXES):
             key = request.headers.get("X-API-Key", "")
             if key != settings.CLIENT_API_KEY:
                 from fastapi.responses import JSONResponse
