@@ -5,18 +5,9 @@
 (function () {
   'use strict';
 
-  // 화면에서 바로 확인할 수 있는 작은 진단 배지 — 모바일에서 devtools 없이도
-  // WebGL이 켜졌는지/왜 꺼졌는지 바로 보임. 5초 후 자동으로 사라짐.
-  function showBadge(text) {
-    const el = document.createElement('div');
-    el.textContent = text;
-    el.style.cssText =
-      'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);' +
-      'background:rgba(0,0,0,0.75);color:#fff;font-size:11px;padding:5px 10px;' +
-      'border-radius:8px;z-index:999;pointer-events:none;white-space:nowrap;';
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 5000);
-  }
+  // 진단은 콘솔 로그로만 남긴다(페이지 로드 시 화면에 안내 배지가 떠서 거슬린다는
+  // 피드백 반영). WebGL 성공/실패는 [orb-gl] 콘솔 메시지로 확인.
+  function showBadge() {}
 
   function init() {
     const orbBtn = document.getElementById('mic-btn');
@@ -70,26 +61,30 @@
       '  vec4 m = max(0.6 - vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)), 0.0); m=m*m;',
       '  return 42.0*dot(m*m, vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));',
       '}',
-      'float fbm(vec3 p){ float a=0.5,s=0.0; for(int i=0;i<4;i++){ s+=a*snoise(p); p*=2.0; a*=0.5;} return s; }',
+      'float fbm(vec3 p){ float a=0.5,s=0.0; for(int i=0;i<5;i++){ s+=a*snoise(p); p*=2.0; a*=0.5;} return s; }',
       'void main(){',
       '  vec2 uv = (gl_FragCoord.xy - 0.5*u_res)/min(u_res.x,u_res.y); uv*=2.0;',
-      '  float r = length(uv); float t = u_time*0.18; float lvl = clamp(u_level,0.0,1.0);',
-      '  float n = fbm(vec3(uv*1.3, t));',
-      // 가장자리는 거의 동그란 원에 가깝게(살짝만 일렁임) — 너무 들쭉날쭉하면
-      // 저화질로 보임. 진폭(lvl)에는 또렷하게 반응하되 노이즈 변형은 작게.
-      '  float radius = 0.62 + 0.018*n + 0.10*lvl;',
-      '  float edge = smoothstep(radius+0.012, radius-0.012, r);', // 또렷한 경계(작은 AA만)
+      '  float r = length(uv); float t = u_time*0.32; float lvl = clamp(u_level,0.0,1.0);',
+      // 둥근 실루엣 유지(가장자리 노이즈는 작게) — 진폭에 또렷이 반응.
+      '  float radius = 0.60 + 0.02*sin(t*0.7) + 0.13*lvl;',
+      '  float edge = smoothstep(radius+0.02, radius-0.05, r);',
       '  float z = sqrt(max(0.0, radius*radius - r*r));',
       '  vec3 nrm = normalize(vec3(uv, z));',
-      '  vec3 lightDir = normalize(vec3(-0.35, 0.6, 0.7));',
+      // 표면을 따라 흐르는 액체 무늬 — 구 위 좌표(nrm)를 입력으로 두 겹의 fbm을
+      // 시간에 따라 서로 다른 방향으로 흐르게 해 살아있는 일렁임을 만든다.
+      '  vec3 sp = nrm * (1.3 + 0.2*lvl);',
+      '  float f1 = fbm(sp*1.4 + vec3(0.0, 0.0, t));',
+      '  float f2 = fbm(sp*2.6 + vec3(t*0.6, -t*0.45, t*0.2));',
+      '  float surf = 0.5 + 0.5*sin(f1*3.1 + f2*2.2 + t*1.2);',
+      '  vec3 lightDir = normalize(vec3(-0.35, 0.55, 0.72));',
       '  float diff = clamp(dot(nrm, lightDir), 0.0, 1.0);',
-      '  float fres = pow(1.0 - clamp(z/max(radius,0.001),0.0,1.0), 2.0);',
-      '  float flow = fbm(vec3(uv*1.6 + n*0.5, t*1.1));',
-      // 내부 노이즈의 영향은 작게 줘서 매끈한 광택 구처럼, 미세한 흐름만 보이게.
-      '  float bright = 0.55 + 0.55*pow(diff, 1.4) + 0.10*flow + 0.45*lvl;',
-      '  vec3 col = mix(u_colA, u_colB, 0.5+0.35*flow); col *= bright;',
-      '  col += fres*0.45*u_colB;',
-      '  col += pow(diff, 7.0)*0.6;',
+      '  float fres = pow(1.0 - clamp(z/max(radius,0.001),0.0,1.0), 2.3);',
+      '  vec3 col = mix(u_colA, u_colB, surf);',          // 흐르는 색
+      '  col *= 0.5 + 0.65*pow(diff, 1.2);',              // 구 음영
+      '  col += 0.22*surf*u_colB;',                       // 내부로 흐르는 빛
+      '  col += fres*0.40*u_colB;',                       // 림 글로우
+      '  col += pow(diff, 9.0)*0.7;',                     // 광택 하이라이트
+      '  col += lvl*0.25;',                               // 말할/들을 때 전체 밝아짐
       '  gl_FragColor = vec4(col, edge);',
       '}'
     ].join('\n');

@@ -56,24 +56,47 @@ let endRequested = false;
 const audioQueue = [];
 let isPlaying = false;
 
+// ── iOS 자동재생 잠금 해제 ──────────────────────────────────────────────
+// iOS Safari는 사용자 제스처 없이는 audio.play()를 막는다. TTS는 WebSocket으로
+// 비동기 도착하므로 제스처와 분리돼 차단된다(맥북 데스크톱은 제한이 약해 잘 됨).
+// 해결: <audio> 엘리먼트 하나를 만들어 두고, 사용자 제스처(시작/음성 버튼 탭)의
+// '동기' 구간에서 무음 클립을 한 번 재생해 잠금을 풀어둔다. 이후 같은 엘리먼트의
+// src만 바꿔 재생하면 iOS가 허용한다. 매번 new Audio()를 만들면 잠금이 안 풀린다.
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
+let ttsAudio = null;
+function getTtsAudio() {
+  if (!ttsAudio) {
+    ttsAudio = new Audio();
+    ttsAudio.setAttribute('playsinline', '');
+    ttsAudio.preload = 'auto';
+  }
+  return ttsAudio;
+}
+// 반드시 제스처 핸들러의 '동기' 구간에서(await 이전에) 호출해야 iOS가 잠금을 푼다.
+function unlockAudio() {
+  const a = getTtsAudio();
+  try {
+    a.src = SILENT_WAV;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (_) {}
+}
+
 // 같은 AI 턴의 문장들을 풍선 하나에 이어붙이기 위한 참조.
 // 사용자 발화(새 턴)가 들어오면 null로 리셋해 다음 AI 문장은 새 풍선부터 시작한다.
 let currentAiBubble = null;
 
 // ── 음성 오브 실시간 진폭 — ChatGPT/Gemini 음성모드 느낌의 원형 비주얼.
 // 핵심 설계 원칙(2026-06 모바일 Safari 디버깅 후 재설계):
-//  1) 소리 경로와 시각화 경로를 완전히 분리한다. 소리는 항상 <audio>로 직접
-//     재생(어떤 경우에도 보장), 시각화는 best-effort로 별도 계산.
-//  2) 마이크 분석 노드는 gain=0을 거쳐 destination에 연결한다 — Safari/WebKit은
-//     destination으로 가는 경로가 없는 AnalyserNode의 데이터를 갱신하지 않는
-//     버그가 있어(Chrome은 갱신) 모바일에서 오브가 마이크에 반응하지 않았다.
-//     gain=0이라 하울링 없이 무음으로 분석만 돌아간다.
+//  1) 소리 경로와 시각화 경로를 완전히 분리한다. 소리는 항상 <audio>로 직접 재생.
+//  2) 마이크 진폭은 Web Audio AnalyserNode(모바일 Safari에서 안 갱신되는 버그)
+//     대신, VAD가 이미 처리 중인 오디오 프레임(onFrameProcessed)에서 직접 RMS를
+//     뽑는다 — 가장 확실하게 동작하는 경로.
 let audioCtx = null;
-let micStream = null; // VAD가 getStream으로 얻은 마이크 스트림 — 오브 분석도 이걸 재사용한다.
-let micAnalyser = null;
-let micAnalyserData = null;
 let orbRAF = null;
-let orbLevel = 0;           // 현재 진폭(0~1) — CSS 폴백·WebGL 오브가 함께 읽는다.
+let orbLevel = 0;       // 현재 진폭(0~1) — CSS 폴백·WebGL 오브가 함께 읽는다.
+let micFrameRms = 0;    // VAD onFrameProcessed가 갱신하는 마이크 진폭
+let micFrameAt = 0;     // 마지막 프레임 수신 시각(ms) — 신선도 판단용
 
 async function ensureAudioContext() {
   if (!audioCtx) {
@@ -86,51 +109,18 @@ async function ensureAudioContext() {
   return audioCtx;
 }
 
-// getUserMedia를 VAD와 오브 시각화가 각자 따로 호출하면(특히 모바일 Safari에서)
-// 동시 마이크 스트림 두 개가 충돌해 음성 인식이 불안정해지는 문제가 있었다.
-// 그래서 VAD 쪽 옵션(getStream)에서 받아온 스트림을 여기서 그대로 재사용한다.
-async function setupMicAnalyser() {
-  if (micAnalyser || !micStream) return;
-  try {
-    const ctx = await ensureAudioContext();
-    const source = ctx.createMediaStreamSource(micStream);
-    micAnalyser = ctx.createAnalyser();
-    micAnalyser.fftSize = 512;
-    micAnalyserData = new Uint8Array(micAnalyser.fftSize);
-    source.connect(micAnalyser);
-    // Safari가 analyser를 갱신하도록 destination까지 경로를 만들되 gain=0으로 무음.
-    const zero = ctx.createGain();
-    zero.gain.value = 0;
-    micAnalyser.connect(zero);
-    zero.connect(ctx.destination);
-  } catch (e) {
-    console.warn('[orb] 마이크 진폭 분석 설정 실패(오브는 애니메이션만 동작)', e);
-  }
-}
-
-function getMicRms() {
-  if (!micAnalyser) return 0;
-  micAnalyser.getByteTimeDomainData(micAnalyserData);
-  let sum = 0;
-  for (let i = 0; i < micAnalyserData.length; i++) {
-    const v = (micAnalyserData[i] - 128) / 128;
-    sum += v * v;
-  }
-  return Math.sqrt(sum / micAnalyserData.length);
-}
-
 function startOrbLoop() {
   if (orbRAF) return;
   const tick = () => {
     let level = 0;
     if (micBtn.classList.contains('speaking')) {
-      // 실제 TTS 진폭은 더 이상 분석하지 않는다 — decodeAudioData가 iOS에서
-      // <audio> 재생과 오디오 리소스를 다퉈 TTS가 통째로 무음이 되는 버그가
-      // 있었다(2026-06, 모바일 Safari·Chrome 둘 다). 소리를 100% 보장하기
-      // 위해 말하는중은 자연스러운 합성 펄스로 대체한다(실제 음량과는 무관).
-      level = 0.22 + 0.16 * Math.abs(Math.sin(performance.now() / 220));
+      // 말하는중은 합성 펄스(실제 TTS 진폭은 iOS 무음 버그 때문에 분석 안 함).
+      level = 0.24 + 0.16 * Math.abs(Math.sin(performance.now() / 220));
     } else if (micBtn.classList.contains('active')) {
-      level = getMicRms();
+      // 듣는중: VAD 프레임 RMS가 최근(250ms 내) 들어왔으면 그걸 쓰고, 아니면 0.
+      // 위에서 오브 자체의 기본 일렁임(셰이더/CSS)이 항상 돌고 있으므로 0이어도
+      // 죽은 듯 보이지 않는다.
+      level = (performance.now() - micFrameAt < 250) ? micFrameRms * 6 : 0;
     }
     // 살짝 부드럽게(감쇠) — 갑작스런 튐 방지.
     const target = Math.min(1, level * 4);
@@ -254,14 +244,15 @@ function enqueueAudio(buf) {
 // <audio> 재생은 Web Audio API(AudioContext/AnalyserNode/decodeAudioData)와
 // 절대 엮지 않는다 — iOS에서 오디오 리소스를 다퉈 TTS가 통째로 무음이 되는
 // 버그가 있었다(2026-06). 오브의 '말하는중' 애니메이션은 합성 펄스로 대체.
+// 또, unlockAudio()로 제스처 때 풀어둔 '동일' 엘리먼트를 재사용해 iOS 자동재생
+// 차단을 피한다(매번 new Audio()면 차단됨).
 function playNextInQueue() {
   if (isPlaying || audioQueue.length === 0) return;
   isPlaying = true;
   const buf = audioQueue.shift();
   const blob = new Blob([buf], { type: 'audio/wav' });
   const url = URL.createObjectURL(blob);
-  console.log('[audio] 재생 시도, blob bytes=' + buf.byteLength + ' url=' + url.slice(0, 40));
-  const audio = new Audio();
+  const audio = getTtsAudio();
   if (vad) { try { vad.pause(); } catch (_) {} }
   setStatus('🔊 답변 재생 중…');
   micBtn.classList.add('speaking');
@@ -270,6 +261,7 @@ function playNextInQueue() {
   const cleanup = (reason) => {
     if (reason) console.log('[audio] cleanup: ' + reason);
     URL.revokeObjectURL(url);
+    audio.onended = null; audio.onerror = null; // 재사용 엘리먼트라 리스너를 매번 정리
     isPlaying = false;
     if (audioQueue.length > 0) {
       playNextInQueue();
@@ -277,24 +269,19 @@ function playNextInQueue() {
       resumeAfterPlayback();
     }
   };
-  audio.addEventListener('ended', () => cleanup('ended'));
-  audio.addEventListener('error', () => {
+  audio.onended = () => cleanup('ended');
+  audio.onerror = () => {
     const codes = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
     const code = audio.error && audio.error.code;
     const detail = code ? (codes[code] || code) : '알수없음';
-    console.error('[audio] error 이벤트, code=' + detail);
-    setStatus('🔇 음성 재생 오류(' + detail + ') — 텍스트로 이어집니다');
+    setStatus('🔇 음성 재생 오류(' + detail + ')');
     cleanup('error:' + detail);
-  });
+  };
   audio.src = url;
   const p = audio.play();
-  if (p && p.then) {
-    p.then(() => console.log('[audio] play() 성공'));
-  }
   if (p && p.catch) {
     p.catch((err) => {
-      console.error('[audio] play() 거부:', err && err.name, err && err.message);
-      setStatus('🔇 음성 재생 차단(' + (err && err.name) + ') — 텍스트로 이어집니다');
+      setStatus('🔇 음성 재생 차단(' + (err && err.name) + ')');
       cleanup('play-rejected');
     });
   }
@@ -339,20 +326,22 @@ async function initVAD() {
   }
   if (!vad) {
     vad = await window.vad.MicVAD.new({
-      // getUserMedia를 VAD 안에서 자체적으로 부르게 두면(기본 동작), 오브 진폭
-      // 분석용으로 따로 또 getUserMedia를 부를 때 모바일 Safari에서 두 스트림이
-      // 충돌해 인식이 불안정해졌다. 여기서 한 번만 얻어 micStream에 저장하고
-      // setupMicAnalyser()도 같은 스트림을 재사용한다.
-      getStream: async () => {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        return micStream;
-      },
       baseAssetPath: 'https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.22/dist/',
       onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/',
       positiveSpeechThreshold: 0.5,
       negativeSpeechThreshold: 0.35,
       minSpeechFrames: 3,
       redemptionFrames: 24,
+      // VAD가 이미 처리 중인 오디오 프레임에서 직접 RMS를 뽑아 오브 진폭으로 쓴다.
+      // (Web Audio AnalyserNode가 모바일 Safari에서 안 갱신되는 문제를 우회)
+      // 라이브러리 버전에 따라 frame 인자가 없을 수 있어 방어적으로 처리.
+      onFrameProcessed: (_probs, frame) => {
+        if (!frame || !frame.length) return;
+        let sum = 0;
+        for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+        micFrameRms = Math.sqrt(sum / frame.length);
+        micFrameAt = performance.now();
+      },
       onSpeechStart: () => {
         setStatus('🗣️ 말하는 중…');
         if (longSpeechTimer) clearTimeout(longSpeechTimer);
@@ -422,18 +411,15 @@ function haptic(pattern) {
 }
 
 async function enterVoiceMode() {
+  unlockAudio(); // ★ 제스처 동기 구간에서 iOS 오디오 잠금 해제(반드시 await 이전)
   openVoiceOverlay();
   setStatus('🎤 마이크 준비 중…');
   try {
-    await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume — 이후 TTS 재생도 이 컨텍스트를 씀
+    await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume
     playStartChime();
     haptic(30);
     await initVAD();
-    // getStream은 new() 시점이 아니라 start()가 실제로 마이크를 잡을 때 호출되는
-    // 듯하다(이 순서가 아니면 micStream이 아직 비어 있어 듣는중 오브가 진폭에
-    // 반응하지 않는 버그가 있었음) — start() 이후에 호출해야 micStream이 채워짐.
-    await vad.start();
-    await setupMicAnalyser(); // 이제 채워진 micStream을 재사용(별도 getUserMedia 없음)
+    await vad.start(); // 진폭은 initVAD의 onFrameProcessed에서 직접 뽑는다(Web Audio 불필요)
     active = true;
     setStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
     micBtn.classList.add('active');
@@ -628,8 +614,9 @@ function startChat() {
   }
   startScreen.style.display = 'none';
   chatScreen.style.display = 'flex';
-  // 사용자 클릭(제스처) 시점에 AudioContext를 미리 만들어둬야, 마이크를 한 번도
-  // 안 켜고 텍스트로만 대화해도 TTS 재생 시 오브 진폭 분석이 정상 동작한다.
+  // 시작 버튼 탭(제스처)에서 iOS 오디오 잠금을 미리 풀어둔다 — 텍스트로만 대화해도
+  // TTS가 비동기로 도착하므로, 여기서 안 풀면 모바일에서 소리가 차단된다.
+  unlockAudio();
   ensureAudioContext();
   connectWS();
 }

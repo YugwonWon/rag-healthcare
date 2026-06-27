@@ -91,6 +91,8 @@ class OllamaClient:
                 # 새는 경우가 관찰됨(2026-06). '<' 다음이 '/'든 '|'든, 끝에 '>'가
                 # 없어도 차단.
                 "</im_end|", "</im_start|", "</endoftext|",
+                # 공백 변형 — <|im End|, <|im end|처럼 언더스코어 대신 공백(2026-06).
+                "<|im End|", "<|im end|", "<|im Start|", "<|im start|",
                 # 가상 멀티턴 생성 차단 — 프롬프트의 conversation_history가
                 # "사용자: ...\nAI: ..." 형식이고 RAG로 들어오는 모범응답 예시가
                 # "이용자: ...\n건강상담사: ..." 형식이라, 모델이 그 패턴을 보고
@@ -208,11 +210,12 @@ class OllamaClient:
         #     <|email_address|> 등. 파이프가 1개든 여러 개든(<||...||>) 모두 제거.
         #     stop 시퀀스가 1차 차단하지만 그래도 새는 경우의 2차 안전망.
         content = re.sub(r"</?\|+[^<>]*?\|+>", "", content)
-        # 닫힘이 불완전하거나(<|im_end, <||im_end|) '<' 다음이 '/'인 변형도
-        # (</im_start|, </im_end|처럼 파이프·꺾쇠 위치가 섞인 케이스, 2026-06
-        # 관찰됨) 알려진 토큰명 기준으로 제거. '<' 다음 슬래시/파이프는 0개 이상.
+        # 닫힘이 불완전하거나(<|im_end, <||im_end|) '<' 다음이 '/'인 변형, 그리고
+        # 'im'과 'end/start' 사이가 언더스코어가 아니라 공백이거나 대소문자가
+        # 섞인 변형(<|im End|, <|Im end|처럼, 2026-06 실기기 관찰됨)도 모두 제거.
+        # 'im'과 키워드 사이는 공백/언더스코어 0개 이상, 끝의 파이프/꺾쇠는 선택.
         content = re.sub(
-            r"<[/|]*\s*(?:im_end|im_start|endoftext|email_address|im_email-end)\s*[/|]*>?",
+            r"<[/|]*\s*(?:im[\s_]*(?:end|start)|endoftext|email[\s_]*address|im[\s_]*email[\s_-]*end)\s*[/|]*>?",
             "", content, flags=re.IGNORECASE,
         )
 
