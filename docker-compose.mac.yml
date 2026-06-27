@@ -45,6 +45,22 @@ services:
       - ./logs:/app/logs
       # HuggingFace 임베딩 모델 캐시 (재다운로드 방지)
       - huggingface_cache:/root/.cache/huggingface
+      # 앱 코드를 볼륨으로 덮어써 빌드 없이 바로 반영(개발 중 빠른 반복용).
+      # web/ 정적 파일은 요청마다 디스크에서 새로 읽으므로 마운트만으로 즉시 반영.
+      # app/ 파이썬은 --reload(아래 command)가 변경 감지해 몇 초 안에 재시작.
+      # requirements.txt가 바뀔 때만 여전히 --build 필요.
+      - ./app:/app/app:ro
+      - ./web:/app/web:ro
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s

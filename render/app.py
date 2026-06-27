@@ -879,6 +879,13 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
                 handsfree_btn = gr.Button("🎤 음성 대화 시작 / 중지", variant="secondary")
                 end_btn = gr.Button("🛑 대화 종료", variant="stop")
                 handsfree_status = gr.Markdown("", elem_id="handsfree_status")
+            # 백엔드가 직접 서빙하는 저지연(WebSocket 직결+문장 단위 스트리밍) 베타 화면 링크.
+            # 새 탭으로 열어 백엔드와 직접 통신하므로 이 Gradio 서버를 거치지 않는다.
+            gr.HTML(
+                f'<div style="text-align:center;margin:2px 0 8px;">'
+                f'<a href="{BACKEND_URL}/doctor/" target="_blank" rel="noopener" '
+                f'style="font-size:13px;color:#667eea;">⚡ 건강박사 챗봇 새 화면 (더 빠른 음성 대화, 새 창에서 열기)</a></div>'
+            )
             with gr.Accordion("🎤 또는 눌러서 말하기 (수동)", open=False):
                 voice_input = gr.Audio(
                     sources=["microphone"],

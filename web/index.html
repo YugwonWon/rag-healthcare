@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>건강박사 챗봇</title>
+<meta name="description" content="어르신을 위한 건강 상담 챗봇 — 천천히, 어르신의 속도에 맞춰 답변합니다.">
+<meta property="og:title" content="건강박사 챗봇">
+<meta property="og:description" content="어르신을 위한 건강 상담 챗봇 — 천천히, 어르신의 속도에 맞춰 답변합니다.">
+<meta property="og:site_name" content="건강박사 챗봇">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="start-screen" class="screen">
+    <h1>건강박사 챗봇</h1>
+    <p class="intro">건강문제에 상담하고 정보를 제공해주는 건강박사 챗봇을 만날 수가 있습니다. 이 챗봇은 인지장애가 있는 어르신을 포함해서 노인들의 건강 상담과 관리를 목적으로 현재 개발중입니다. 아직까지 완벽하지는 않지만 그래도 다른 챗봇과는 달리 이용자들의 속도에 맞게 천천히 답변하고 이용자들이 자신의 건강을 스스로 돌볼 수 있도록 돕는 역할을 하고 있습니다.</p>
+    <input id="nickname" type="text" placeholder="닉네임을 입력하세요" />
+    <button id="start-btn">시작하기</button>
+  </div>
+
+  <div id="chat-screen" class="screen app-screen" style="display:none;">
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="chat">💬 대화</button>
+      <button class="tab-btn" data-tab="profile">👤 프로필</button>
+      <button class="tab-btn" data-tab="admin">🔐 관리자</button>
+    </div>
+
+    <div id="tab-chat" class="tab-panel active">
+      <div id="status" class="status">대기 중</div>
+      <div id="chat" class="chat">
+        <div id="typing-indicator" class="typing-indicator" style="display:none;">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+      <div class="controls">
+        <div id="text-input-row" class="text-row input-row">
+          <input id="text-input" type="text" placeholder="메시지를 입력하세요" />
+          <button id="voice-mode-btn" class="icon-btn" aria-label="음성 대화 시작" title="음성 대화 시작">
+            <span class="wave-icon"><span></span><span></span><span></span><span></span></span>
+          </button>
+          <button id="send-btn" class="icon-btn icon-btn-primary" aria-label="보내기" title="보내기">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6M6 11l6-6 6 6"/></svg>
+          </button>
+        </div>
+
+        <!-- 음성 모드 — 채팅 내용은 항상 보이게 두고(청각장애인 등 글로 읽는
+             사용자 고려), 입력줄 자리에 오브만 인라인으로 나타난다. 전체화면
+             전환 아님. -->
+        <div id="voice-panel" class="voice-panel">
+          <div class="voice-stage">
+            <button id="mic-btn" class="voice-orb" aria-label="음성 대화 중지">
+              <span class="voice-orb-ring"></span>
+              <span class="voice-orb-swirl"></span>
+              <span class="voice-orb-core"></span>
+              <span class="voice-orb-highlight"></span>
+            </button>
+            <div id="mic-label" class="mic-label">듣는 중…</div>
+          </div>
+          <button id="voice-close-btn" class="voice-close-btn" aria-label="음성 대화 종료">✕</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-profile" class="tab-panel">
+      <h2>프로필 설정</h2>
+
+      <div class="irb-notice">
+        <h3>📋 연구 참여 안내(IRB 승인 연구)</h3>
+        <p>본 챗봇은 <strong>고령자 건강관리 지원을 위한 연구</strong> 목적으로 운영됩니다.</p>
+        <ul>
+          <li><strong>연구기관</strong>: (IRB 수정심의 진행 중)</li>
+          <li><strong>목적</strong>: 고령자 맞춤형 건강 정보 제공 챗봇의 효과성 검증</li>
+          <li><strong>안내</strong>: 본 챗봇은 연구 목적의 데모용으로 제작되었습니다. <strong>의료적 진단, 약물 투약 관리, 개인화된 의료 처치를 제공하지 않습니다.</strong> 건강 관련 전문적인 상담은 반드시 의료 전문가와 상의하시기 바랍니다.</li>
+        </ul>
+        <p class="irb-warning">⚠️ 아래 "건강정보 개인화 활용 동의"에 체크하시면, 입력하신 건강 상태와 특이사항이 대화 시 맞춤형 응답에 활용됩니다. 동의하지 않으셔도 챗봇 이용에는 제한이 없습니다.</p>
+      </div>
+
+      <label class="field-label">이름</label>
+      <input id="profile-name" type="text" />
+      <label class="field-label">나이</label>
+      <input id="profile-age" type="number" min="0" max="120" />
+      <label class="consent-row">
+        <input id="profile-consent" type="checkbox" />
+        ✅ 건강정보 개인화 활용에 동의합니다(선택사항)
+      </label>
+      <p class="consent-info">동의 시 건강 상태/질환, 특이사항이 대화에 반영됩니다. 동의하지 않아도 서비스 이용이 가능합니다.</p>
+      <label class="field-label">질환·건강상태</label>
+      <textarea id="profile-conditions" rows="2"></textarea>
+      <label class="field-label">비상연락처</label>
+      <input id="profile-emergency" type="text" />
+      <label class="field-label">특이사항</label>
+      <textarea id="profile-notes" rows="2"></textarea>
+      <button id="profile-save-btn">저장</button>
+      <div id="profile-status" class="form-status"></div>
+    </div>
+
+    <div id="tab-admin" class="tab-panel">
+      <h2>관리자 메뉴</h2>
+      <div class="text-row">
+        <input id="admin-pw" type="password" placeholder="관리자 비밀번호" />
+        <button id="admin-login-btn">로그인</button>
+      </div>
+      <div id="admin-status" class="form-status"></div>
+      <div id="admin-panel" style="display:none;">
+        <div class="radio-row">
+          <label><input type="radio" name="admin-source" value="history" checked /> 전체 대화 기록</label>
+          <label><input type="radio" name="admin-source" value="logs" /> 분석 로그(메타데이터 포함)</label>
+        </div>
+        <div class="text-row">
+          <button id="admin-view-btn">표로 보기</button>
+          <button id="admin-csv-btn">CSV 다운로드</button>
+        </div>
+        <div id="admin-table-wrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="orb.js"></script>
+</body>
+</html>

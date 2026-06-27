@@ -4,7 +4,8 @@
 """
 
 import asyncio
-from typing import Optional
+import json
+from typing import AsyncIterator, Optional
 import httpx
 import numpy as np
 
@@ -70,6 +71,42 @@ class OllamaClient:
         
         return response.json()["response"]
     
+    @staticmethod
+    def _build_chat_options(temperature: Optional[float], max_tokens: Optional[int]) -> dict:
+        """chat()/chat_stream() 공통 옵션 (반복 방지·특수 토큰 차단 동일하게 적용)."""
+        return {
+            "temperature": temperature or settings.LLM_TEMPERATURE,
+            "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
+            "repeat_penalty": 1.5,  # 반복 방지 강화 (전문가 검토: '동경님께서…' 두 번 반복 등 차단)
+            "top_p": 0.9,
+            "top_k": 40,
+            # ChatML/특수 토큰 새는 것 방지 — 2.1B 모델이 <|im_end|>·<|email_address|>
+            # 등을 뱉고도 계속 생성하던 문제 차단.
+            "stop": [
+                "<|im_end|>", "<|im_start|>", "<|endoftext|>",
+                "<|email_address|>", "<|im_email-end|>", "</s>",
+                # 파이프 2개 변형 — 2.1B 모델이 <||im_end|> 처럼 뱉는 케이스 관찰됨
+                "<||im_end|>", "<||im_start|>", "<||endoftext|>",
+                # </im_start|, </im_end| 변형 — 슬래시+파이프가 섞인 형태로도
+                # 새는 경우가 관찰됨(2026-06). '<' 다음이 '/'든 '|'든, 끝에 '>'가
+                # 없어도 차단.
+                "</im_end|", "</im_start|", "</endoftext|",
+                # 공백 변형 — <|im End|, <|im end|처럼 언더스코어 대신 공백(2026-06).
+                "<|im End|", "<|im end|", "<|im Start|", "<|im start|",
+                # 가상 멀티턴 생성 차단 — 프롬프트의 conversation_history가
+                # "사용자: ...\nAI: ..." 형식이고 RAG로 들어오는 모범응답 예시가
+                # "이용자: ...\n건강상담사: ..." 형식이라, 모델이 그 패턴을 보고
+                # 답 하나만 하면 될 자리에서 가상의 다음 턴들을 계속 만들어내는
+                # 경우가 관찰됨. 한국어 라벨뿐 아니라 ChatML 영어 role 라벨
+                # (user/assistant)로도 새는 케이스가 있어 같이 차단한다.
+                # "어르신:"도 추가(2026-06) — 우리 프롬프트가 모델에게 호칭으로
+                # "어르신"을 쓰라고 지시하다 보니, 모델이 그 단어를 역할 라벨로도
+                # 써서 "어르신: <가상 발화>" 형태로 새는 사례가 실제 대화에서 확인됨.
+                "사용자:", "AI:", "이용자:", "건강상담사:", "어르신:",
+                "\nuser", "\nassistant", "\nsystem",
+            ],
+        }
+
     async def chat(
         self,
         messages: list[dict],
@@ -79,38 +116,24 @@ class OllamaClient:
     ) -> str:
         """
         채팅 형식 생성
-        
+
         Args:
             messages: 채팅 메시지 리스트
             temperature: 생성 온도
             max_tokens: 최대 토큰 수
-        
+
         Returns:
             생성된 응답
         """
         client = await self._get_client()
-        
+
         payload = {
             "model": self.model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": temperature or settings.LLM_TEMPERATURE,
-                "num_predict": max_tokens or settings.LLM_MAX_TOKENS,
-                "repeat_penalty": 1.5,  # 반복 방지 강화 (전문가 검토: '동경님께서…' 두 번 반복 등 차단)
-                "top_p": 0.9,
-                "top_k": 40,
-                # ChatML/특수 토큰 새는 것 방지 — 2.1B 모델이 <|im_end|>·<|email_address|>
-                # 등을 뱉고도 계속 생성하던 문제 차단.
-                "stop": [
-                    "<|im_end|>", "<|im_start|>", "<|endoftext|>",
-                    "<|email_address|>", "<|im_email-end|>", "</s>",
-                    # 파이프 2개 변형 — 2.1B 모델이 <||im_end|> 처럼 뱉는 케이스 관찰됨
-                    "<||im_end|>", "<||im_start|>", "<||endoftext|>",
-                ],
-            }
+            "options": self._build_chat_options(temperature, max_tokens),
         }
-        
+
         try:
             response = await client.post(
                 f"{self.base_url}/api/chat",
@@ -131,7 +154,44 @@ class OllamaClient:
         except httpx.HTTPError as e:
             logger.error(f"Ollama HTTP 에러: {e}")
             return "죄송합니다, 일시적인 오류가 발생했어요. 다시 말씀해 주세요. 🙏"
-    
+
+    async def chat_stream(
+        self,
+        messages: list[dict],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        **kwargs
+    ) -> AsyncIterator[str]:
+        """채팅 응답을 토큰 델타 단위로 스트리밍한다 (문장 단위 TTS용).
+
+        Ollama `/api/chat`에 stream:true로 호출하면 NDJSON(줄마다 JSON 객체)이
+        오고, 각 줄의 message.content가 토큰 델타다. done:true 줄에서 종료.
+        chat()과 동일 옵션(repeat_penalty/stop 등)을 써서 품질 차이가 없게 한다.
+        """
+        client = await self._get_client()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": self._build_chat_options(temperature, max_tokens),
+        }
+        try:
+            async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    delta = chunk.get("message", {}).get("content", "")
+                    if delta:
+                        yield delta
+                    if chunk.get("done"):
+                        break
+        except httpx.TimeoutException:
+            logger.error(f"Ollama 스트리밍 타임아웃 ({OLLAMA_TIMEOUT}초 초과)")
+        except httpx.HTTPError as e:
+            logger.error(f"Ollama 스트리밍 HTTP 에러: {e}")
+
     @staticmethod
     def _postprocess_exaone(content: str) -> str:
         """EXAONE 4.0 응답 후처리: think 블록 제거, 아티팩트 정리"""
@@ -150,15 +210,31 @@ class OllamaClient:
         #     <|email_address|> 등. 파이프가 1개든 여러 개든(<||...||>) 모두 제거.
         #     stop 시퀀스가 1차 차단하지만 그래도 새는 경우의 2차 안전망.
         content = re.sub(r"</?\|+[^<>]*?\|+>", "", content)
-        # 닫힘이 불완전한 잔재(<|im_end, <||im_end| 등)도 알려진 토큰명 기준으로 제거.
+        # 닫힘이 불완전하거나(<|im_end, <||im_end|) '<' 다음이 '/'인 변형, 그리고
+        # 'im'과 'end/start' 사이가 언더스코어가 아니라 공백이거나 대소문자가
+        # 섞인 변형(<|im End|, <|Im end|처럼, 2026-06 실기기 관찰됨)도 모두 제거.
+        # 'im'과 키워드 사이는 공백/언더스코어 0개 이상, 끝의 파이프/꺾쇠는 선택.
         content = re.sub(
-            r"<\|+\s*(?:im_end|im_start|endoftext|email_address|im_email-end)\s*\|*>?",
+            r"<[/|]*\s*(?:im[\s_]*(?:end|start)|endoftext|email[\s_]*address|im[\s_]*email[\s_-]*end)\s*[/|]*>?",
             "", content, flags=re.IGNORECASE,
         )
 
         # 2c) 프롬프트 라벨 누출 제거 — 2.1B 모델이 "가벼운 질문:", "후속 질문:" 같은
         #     지시어 라벨을 응답에 그대로 붙이는 경우(줄 시작·문중 모두). 라벨만 떼고 질문은 살린다.
         content = re.sub(r"(?:가벼운|후속|추가|간단한)?\s*질문\s*[:：]\s*", "", content)
+
+        # 2d) 가상 멀티턴 라벨 잔재 제거 — stop 시퀀스가 보통 막지만, 그 직전까지
+        # 생성된 라벨 단독 줄("user", "사용자:" 등)이 끝에 남는 경우의 2차 안전망.
+        content = re.sub(r"\n\s*(?:user|assistant|system)\s*$", "", content, flags=re.IGNORECASE)
+        content = re.sub(r"\n\s*(?:사용자|AI|이용자|건강상담사|어르신)\s*[:：]?\s*$", "", content)
+
+        # 2e) <NAME> 플레이스홀더 제거 — 학습 데이터의 개인정보 마스킹 토큰이
+        # 그대로 새어 나와 "<NAME>(김광석)의" 같은 형태로 출력되는 경우가 실제
+        # 대화에서 관찰됨(2026-06). "<NAME>(실제이름)"은 실제이름만 남기고,
+        # 괄호 없는 단독 <NAME>은 통째로 제거한다. 방치하면 사람 이름이 들어간
+        # 문장이 TTS로 제대로 안 읽히는 2차 문제도 같이 생김.
+        content = re.sub(r"<NAME>\s*\(([^)]*)\)", r"\1", content, flags=re.IGNORECASE)
+        content = re.sub(r"<NAME>\s*", "", content, flags=re.IGNORECASE)  # 단독 <NAME> 제거(뒤 공백도 같이)
 
         # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
         content = content.strip()
@@ -279,6 +355,10 @@ class LocalLLM(BaseLLM):
     async def chat(self, messages: list[dict], **kwargs) -> str:
         """채팅 형식 생성"""
         return await self.client.chat(messages, **kwargs)
+
+    def chat_stream(self, messages: list[dict], **kwargs) -> AsyncIterator[str]:
+        """채팅 응답 토큰 스트리밍 (문장 단위 TTS 파이프라인용)"""
+        return self.client.chat_stream(messages, **kwargs)
     
     async def is_available(self) -> bool:
         """모델 사용 가능 여부"""
