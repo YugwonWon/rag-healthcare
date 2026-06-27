@@ -9,7 +9,7 @@ const startScreen = document.getElementById('start-screen');
 const chatScreen = document.getElementById('chat-screen');
 const startBtn = document.getElementById('start-btn');
 const micBtn = document.getElementById('mic-btn');
-const micLabel = micBtn.querySelector('.mic-label');
+const micLabel = document.getElementById('mic-label');
 const textInput = document.getElementById('text-input');
 const sendBtn = document.getElementById('send-btn');
 const typingIndicator = document.getElementById('typing-indicator');
@@ -55,6 +55,87 @@ let isPlaying = false;
 // 같은 AI 턴의 문장들을 풍선 하나에 이어붙이기 위한 참조.
 // 사용자 발화(새 턴)가 들어오면 null로 리셋해 다음 AI 문장은 새 풍선부터 시작한다.
 let currentAiBubble = null;
+
+// ── 음성 오브 실시간 진폭 — ChatGPT/Gemini 음성모드 느낌의 원형 비주얼.
+// VAD 내부 스트림을 건드리지 않고, 시각화 전용으로 별도 getUserMedia 스트림을
+// 하나 더 열어 분석한다(VAD 로직과 완전히 분리해 회귀 위험을 낮춤).
+let audioCtx = null;
+let micAnalyser = null;
+let micAnalyserData = null;
+let playbackAnalyser = null;
+let playbackAnalyserData = null;
+let orbRAF = null;
+
+async function ensureAudioContext() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new Ctx();
+  }
+  if (audioCtx.state === 'suspended') {
+    try { await audioCtx.resume(); } catch (_) {}
+  }
+  return audioCtx;
+}
+
+async function setupMicAnalyser() {
+  if (micAnalyser) return;
+  try {
+    const ctx = await ensureAudioContext();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const source = ctx.createMediaStreamSource(stream);
+    micAnalyser = ctx.createAnalyser();
+    micAnalyser.fftSize = 256;
+    micAnalyserData = new Uint8Array(micAnalyser.frequencyBinCount);
+    source.connect(micAnalyser);
+  } catch (e) {
+    console.warn('[orb] 마이크 진폭 분석 설정 실패(오브는 애니메이션만 동작)', e);
+  }
+}
+
+function attachPlaybackAnalyser(audioEl) {
+  if (!audioCtx) return;
+  try {
+    const source = audioCtx.createMediaElementSource(audioEl);
+    playbackAnalyser = audioCtx.createAnalyser();
+    playbackAnalyser.fftSize = 256;
+    playbackAnalyserData = new Uint8Array(playbackAnalyser.frequencyBinCount);
+    source.connect(playbackAnalyser);
+    playbackAnalyser.connect(audioCtx.destination); // 분석 후 실제 출력으로 이어줘야 소리가 남
+  } catch (e) {
+    console.warn('[orb] 재생 진폭 분석 연결 실패(소리는 정상 재생됨)', e);
+  }
+}
+
+function getRmsLevel(analyser, data) {
+  analyser.getByteTimeDomainData(data);
+  let sumSquares = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = (data[i] - 128) / 128;
+    sumSquares += v * v;
+  }
+  return Math.sqrt(sumSquares / data.length);
+}
+
+function startOrbLoop() {
+  if (orbRAF) return;
+  const tick = () => {
+    let level = 0;
+    if (micBtn.classList.contains('speaking') && playbackAnalyser) {
+      level = getRmsLevel(playbackAnalyser, playbackAnalyserData);
+    } else if (micBtn.classList.contains('active') && micAnalyser) {
+      level = getRmsLevel(micAnalyser, micAnalyserData);
+    }
+    micBtn.style.setProperty('--level', Math.min(1, level * 4).toFixed(3));
+    orbRAF = requestAnimationFrame(tick);
+  };
+  orbRAF = requestAnimationFrame(tick);
+}
+
+function stopOrbLoopIfIdle() {
+  if (micBtn.classList.contains('active') || micBtn.classList.contains('speaking')) return;
+  if (orbRAF) { cancelAnimationFrame(orbRAF); orbRAF = null; }
+  micBtn.style.setProperty('--level', 0);
+}
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -165,6 +246,9 @@ function playNextInQueue() {
   const audio = new Audio(url);
   if (vad) { try { vad.pause(); } catch (_) {} }
   setStatus('🔊 답변 재생 중… (마이크 일시정지)');
+  micBtn.classList.add('speaking');
+  attachPlaybackAnalyser(audio);
+  startOrbLoop();
 
   const cleanup = () => {
     URL.revokeObjectURL(url);
@@ -189,18 +273,21 @@ function playNextInQueue() {
 // 답변 재생(큐 전체)이 끝나면 마이크를 다시 켠다. 1.5s 지연은 스피커 잔향이
 // 마이크로 들어와 self-trigger 되는 것을 막기 위함(render/app.py와 동일 패턴).
 function resumeAfterPlayback() {
+  micBtn.classList.remove('speaking');
   if (endRequested) {
     endRequested = false;
     active = false;
     if (vad) { try { vad.pause(); } catch (_) {} }
     setStatus('✅ 대화가 종료되었습니다. 다시 시작하려면 마이크 버튼을 누르세요.');
-    micLabel.textContent = '🎤 음성 대화 시작';
+    micLabel.textContent = '음성 대화 시작';
     micBtn.classList.remove('active');
+    stopOrbLoopIfIdle();
     ignoreVAD = false;
     return;
   }
   if (!active) {
     setStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
+    stopOrbLoopIfIdle();
     ignoreVAD = false;
     return;
   }
@@ -265,18 +352,22 @@ async function toggleMic() {
     if (vad) vad.pause();
     active = false;
     setStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
-    micLabel.textContent = '🎤 음성 대화 시작';
+    micLabel.textContent = '음성 대화 시작';
     micBtn.classList.remove('active');
+    stopOrbLoopIfIdle();
     return;
   }
   setStatus('🎤 마이크 준비 중…');
   try {
+    await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume — 이후 TTS 재생도 이 컨텍스트를 씀
+    await setupMicAnalyser();
     await initVAD();
     await vad.start();
     active = true;
     setStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
-    micLabel.textContent = '⏹️ 음성 대화 중지';
+    micLabel.textContent = '음성 대화 중지';
     micBtn.classList.add('active');
+    startOrbLoop();
   } catch (e) {
     console.error('mic/VAD init error', e);
     setStatus('❌ 마이크/VAD 초기화 실패 — 브라우저 콘솔을 확인하세요');
@@ -458,6 +549,9 @@ function startChat() {
   }
   startScreen.style.display = 'none';
   chatScreen.style.display = 'flex';
+  // 사용자 클릭(제스처) 시점에 AudioContext를 미리 만들어둬야, 마이크를 한 번도
+  // 안 켜고 텍스트로만 대화해도 TTS 재생 시 오브 진폭 분석이 정상 동작한다.
+  ensureAudioContext();
   connectWS();
 }
 

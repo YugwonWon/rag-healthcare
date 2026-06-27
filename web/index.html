@@ -34,10 +34,14 @@
         </div>
       </div>
       <div class="controls">
-        <button id="mic-btn" class="mic-btn">
-          <span class="mic-pulse"></span>
-          <span class="mic-label">🎤 음성 대화 시작</span>
-        </button>
+        <div class="voice-stage">
+          <button id="mic-btn" class="voice-orb" aria-label="음성 대화 시작/중지">
+            <span class="voice-orb-ring"></span>
+            <span class="voice-orb-core"></span>
+            <span class="voice-orb-icon">🎤</span>
+          </button>
+          <div id="mic-label" class="mic-label">음성 대화 시작</div>
+        </div>
         <div class="text-row">
           <input id="text-input" type="text" placeholder="또는 텍스트로 입력하세요" />
           <button id="send-btn">보내기</button>
