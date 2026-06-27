@@ -5,6 +5,19 @@
 (function () {
   'use strict';
 
+  // 화면에서 바로 확인할 수 있는 작은 진단 배지 — 모바일에서 devtools 없이도
+  // WebGL이 켜졌는지/왜 꺼졌는지 바로 보임. 5초 후 자동으로 사라짐.
+  function showBadge(text) {
+    const el = document.createElement('div');
+    el.textContent = text;
+    el.style.cssText =
+      'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);' +
+      'background:rgba(0,0,0,0.75);color:#fff;font-size:11px;padding:5px 10px;' +
+      'border-radius:8px;z-index:999;pointer-events:none;white-space:nowrap;';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 5000);
+  }
+
   function init() {
     const orbBtn = document.getElementById('mic-btn');
     if (!orbBtn) return;
@@ -16,8 +29,14 @@
     try {
       gl = canvas.getContext('webgl', { premultipliedAlpha: false, antialias: true })
         || canvas.getContext('experimental-webgl');
-    } catch (_) {}
-    if (!gl) { console.warn('[orb-gl] WebGL 미지원 — CSS 오브로 폴백'); return; }
+    } catch (e) {
+      showBadge('🔴 오브: WebGL 컨텍스트 예외 — ' + e.message);
+    }
+    if (!gl) {
+      console.warn('[orb-gl] WebGL 미지원 — CSS 오브로 폴백');
+      showBadge('🟡 오브: WebGL 미지원, CSS로 표시 중');
+      return;
+    }
 
     const vertSrc = 'attribute vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }';
     const fragSrc = [
@@ -53,19 +72,22 @@
       '}',
       'float fbm(vec3 p){ float a=0.5,s=0.0; for(int i=0;i<4;i++){ s+=a*snoise(p); p*=2.0; a*=0.5;} return s; }',
       'void main(){',
-      '  vec2 uv = (gl_FragCoord.xy - 0.5*u_res)/min(u_res.x,u_res.y); uv*=2.2;',
-      '  float r = length(uv); float t = u_time*0.22; float lvl = clamp(u_level,0.0,1.0);',
-      '  float n = fbm(vec3(uv*1.5, t));',
-      '  float radius = 0.70 + 0.05*sin(t*1.3) + 0.12*lvl + 0.05*n;',
-      '  float edge = smoothstep(radius, radius-0.16, r);',
+      '  vec2 uv = (gl_FragCoord.xy - 0.5*u_res)/min(u_res.x,u_res.y); uv*=2.0;',
+      '  float r = length(uv); float t = u_time*0.18; float lvl = clamp(u_level,0.0,1.0);',
+      '  float n = fbm(vec3(uv*1.3, t));',
+      // 가장자리는 거의 동그란 원에 가깝게(살짝만 일렁임) — 너무 들쭉날쭉하면
+      // 저화질로 보임. 진폭(lvl)에는 또렷하게 반응하되 노이즈 변형은 작게.
+      '  float radius = 0.62 + 0.018*n + 0.10*lvl;',
+      '  float edge = smoothstep(radius+0.012, radius-0.012, r);', // 또렷한 경계(작은 AA만)
       '  float z = sqrt(max(0.0, radius*radius - r*r));',
       '  vec3 nrm = normalize(vec3(uv, z));',
-      '  vec3 lightDir = normalize(vec3(-0.4, 0.55, 0.75));',
+      '  vec3 lightDir = normalize(vec3(-0.35, 0.6, 0.7));',
       '  float diff = clamp(dot(nrm, lightDir), 0.0, 1.0);',
-      '  float fres = pow(1.0 - clamp(z/max(radius,0.001),0.0,1.0), 2.5);',
-      '  float flow = fbm(vec3(uv*2.0 + n, t*1.4));',
-      '  float bright = 0.40 + 0.55*diff + 0.35*flow + 0.55*lvl;',
-      '  vec3 col = mix(u_colA, u_colB, 0.5+0.5*flow); col *= bright;',
+      '  float fres = pow(1.0 - clamp(z/max(radius,0.001),0.0,1.0), 2.0);',
+      '  float flow = fbm(vec3(uv*1.6 + n*0.5, t*1.1));',
+      // 내부 노이즈의 영향은 작게 줘서 매끈한 광택 구처럼, 미세한 흐름만 보이게.
+      '  float bright = 0.55 + 0.55*pow(diff, 1.4) + 0.10*flow + 0.45*lvl;',
+      '  vec3 col = mix(u_colA, u_colB, 0.5+0.35*flow); col *= bright;',
       '  col += fres*0.45*u_colB;',
       '  col += pow(diff, 7.0)*0.6;',
       '  gl_FragColor = vec4(col, edge);',
@@ -76,7 +98,9 @@
       const sh = gl.createShader(type);
       gl.shaderSource(sh, src); gl.compileShader(sh);
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        console.warn('[orb-gl] shader 컴파일 실패:', gl.getShaderInfoLog(sh));
+        const log = gl.getShaderInfoLog(sh);
+        console.warn('[orb-gl] shader 컴파일 실패:', log);
+        showBadge('🔴 오브: 셰이더 컴파일 실패 — ' + (log || '').slice(0, 60));
         return null;
       }
       return sh;
@@ -87,7 +111,10 @@
     const prog = gl.createProgram();
     gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-      console.warn('[orb-gl] program 링크 실패:', gl.getProgramInfoLog(prog)); return;
+      const log = gl.getProgramInfoLog(prog);
+      console.warn('[orb-gl] program 링크 실패:', log);
+      showBadge('🔴 오브: 프로그램 링크 실패 — ' + (log || '').slice(0, 60));
+      return;
     }
     gl.useProgram(prog);
 
@@ -157,6 +184,7 @@
     }
     requestAnimationFrame(frame);
     console.log('[orb-gl] WebGL 오브 활성화');
+    showBadge('🟢 오브: WebGL 활성화됨');
   }
 
   if (document.readyState === 'loading') {

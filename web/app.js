@@ -74,8 +74,6 @@ let micAnalyser = null;
 let micAnalyserData = null;
 let orbRAF = null;
 let orbLevel = 0;           // 현재 진폭(0~1) — CSS 폴백·WebGL 오브가 함께 읽는다.
-let currentAudio = null;    // 재생 중인 <audio>
-let speakingEnv = null;     // { env: Float32Array(윈도별 RMS), step: 초/윈도 }
 
 async function ensureAudioContext() {
   if (!audioCtx) {
@@ -110,23 +108,6 @@ async function setupMicAnalyser() {
   }
 }
 
-// TTS 클립(WAV ArrayBuffer)을 디코딩해 윈도별 RMS 엔벨로프를 만든다. 소리 재생과
-// 무관하게(별도 경로) 계산되므로, 이 디코딩이 실패해도 소리는 정상 재생된다.
-async function computeEnvelope(arrayBuffer) {
-  const ctx = await ensureAudioContext();
-  const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
-  const data = decoded.getChannelData(0);
-  const stepSec = 1 / 30; // 30 windows/sec
-  const winLen = Math.max(1, Math.floor(decoded.sampleRate * stepSec));
-  const env = new Float32Array(Math.ceil(data.length / winLen));
-  for (let i = 0, w = 0; i < data.length; i += winLen, w++) {
-    let sum = 0, n = 0;
-    for (let j = i; j < i + winLen && j < data.length; j++, n++) sum += data[j] * data[j];
-    env[w] = Math.sqrt(sum / Math.max(1, n));
-  }
-  return { env, step: stepSec };
-}
-
 function getMicRms() {
   if (!micAnalyser) return 0;
   micAnalyser.getByteTimeDomainData(micAnalyserData);
@@ -143,13 +124,11 @@ function startOrbLoop() {
   const tick = () => {
     let level = 0;
     if (micBtn.classList.contains('speaking')) {
-      if (speakingEnv && currentAudio) {
-        const idx = Math.floor(currentAudio.currentTime / speakingEnv.step);
-        level = speakingEnv.env[Math.min(idx, speakingEnv.env.length - 1)] || 0;
-      } else {
-        // 엔벨로프가 아직 준비 안 됐으면 부드러운 합성 펄스로 대체.
-        level = 0.22 + 0.14 * Math.abs(Math.sin(performance.now() / 200));
-      }
+      // 실제 TTS 진폭은 더 이상 분석하지 않는다 — decodeAudioData가 iOS에서
+      // <audio> 재생과 오디오 리소스를 다퉈 TTS가 통째로 무음이 되는 버그가
+      // 있었다(2026-06, 모바일 Safari·Chrome 둘 다). 소리를 100% 보장하기
+      // 위해 말하는중은 자연스러운 합성 펄스로 대체한다(실제 음량과는 무관).
+      level = 0.22 + 0.16 * Math.abs(Math.sin(performance.now() / 220));
     } else if (micBtn.classList.contains('active')) {
       level = getMicRms();
     }
@@ -172,7 +151,8 @@ function stopOrbLoopIfIdle() {
 
 function setStatus(msg) {
   statusEl.textContent = msg;
-  micLabel.textContent = msg; // 음성 모드 오버레이의 캡션도 같은 상태 문구를 보여줌
+  // mic-label은 더 이상 갱신하지 않음 — 패널이 인라인으로 바뀌면서 상단 상태바와
+  // 동시에 보여 같은 문구가 두 번 뜨는 문제가 있었다(2026-06). CSS로 숨김.
 }
 
 function showTyping() {
@@ -271,43 +251,51 @@ function enqueueAudio(buf) {
   playNextInQueue();
 }
 
+// <audio> 재생은 Web Audio API(AudioContext/AnalyserNode/decodeAudioData)와
+// 절대 엮지 않는다 — iOS에서 오디오 리소스를 다퉈 TTS가 통째로 무음이 되는
+// 버그가 있었다(2026-06). 오브의 '말하는중' 애니메이션은 합성 펄스로 대체.
 function playNextInQueue() {
   if (isPlaying || audioQueue.length === 0) return;
   isPlaying = true;
   const buf = audioQueue.shift();
   const blob = new Blob([buf], { type: 'audio/wav' });
   const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  currentAudio = audio;
-  speakingEnv = null;
+  console.log('[audio] 재생 시도, blob bytes=' + buf.byteLength + ' url=' + url.slice(0, 40));
+  const audio = new Audio();
   if (vad) { try { vad.pause(); } catch (_) {} }
   setStatus('🔊 답변 재생 중…');
   micBtn.classList.add('speaking');
   startOrbLoop();
 
-  // 진폭 엔벨로프는 소리 경로와 독립적으로 계산한다 — 소리는 무조건 아래 <audio>로
-  // 직접 재생되므로(그래프에 묶지 않음) 디코딩 실패해도 소리에는 영향 없다.
-  computeEnvelope(buf)
-    .then((e) => { if (currentAudio === audio) speakingEnv = e; })
-    .catch((err) => console.warn('[orb] 엔벨로프 계산 실패(오브만 영향)', err));
-
-  const cleanup = () => {
+  const cleanup = (reason) => {
+    if (reason) console.log('[audio] cleanup: ' + reason);
     URL.revokeObjectURL(url);
     isPlaying = false;
     if (audioQueue.length > 0) {
       playNextInQueue();
     } else {
-      currentAudio = null;
       resumeAfterPlayback();
     }
   };
-  audio.addEventListener('ended', cleanup);
-  audio.addEventListener('error', cleanup);
+  audio.addEventListener('ended', () => cleanup('ended'));
+  audio.addEventListener('error', () => {
+    const codes = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+    const code = audio.error && audio.error.code;
+    const detail = code ? (codes[code] || code) : '알수없음';
+    console.error('[audio] error 이벤트, code=' + detail);
+    setStatus('🔇 음성 재생 오류(' + detail + ') — 텍스트로 이어집니다');
+    cleanup('error:' + detail);
+  });
+  audio.src = url;
   const p = audio.play();
+  if (p && p.then) {
+    p.then(() => console.log('[audio] play() 성공'));
+  }
   if (p && p.catch) {
     p.catch((err) => {
-      console.warn('[audio] play() 차단:', err && err.message);
-      cleanup();
+      console.error('[audio] play() 거부:', err && err.name, err && err.message);
+      setStatus('🔇 음성 재생 차단(' + (err && err.name) + ') — 텍스트로 이어집니다');
+      cleanup('play-rejected');
     });
   }
 }

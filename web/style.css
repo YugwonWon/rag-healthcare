@@ -389,6 +389,9 @@ button:active { transform: scale(0.97); opacity: 0.92; }
 }
 
 .mic-label {
+  /* 상단 상태바(#status)와 같은 문구가 중복으로 보이던 문제(2026-06) — 숨김.
+     JS는 그대로 두지만(다른 코드 영향 최소화) 화면에는 안 보이게 한다. */
+  display: none;
   font-size: 14px;
   font-weight: 600;
   color: var(--muted);
