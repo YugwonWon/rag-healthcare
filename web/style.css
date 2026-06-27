@@ -4,11 +4,13 @@
   --primary-1: #4f6df5;
   --primary-2: #8b5cf6;
   --primary-grad: linear-gradient(135deg, var(--primary-1) 0%, var(--primary-2) 100%);
-  --listen-1: #14b8a6;
-  --listen-2: #38bdf8;
+  /* 듣는 중=빨강(녹음 연상), 말하는 중=초록(응답) — 카메라 앱의 녹화 표시와
+     같은 색 관습을 따른다. */
+  --listen-1: #ef4444;
+  --listen-2: #b91c1c;
   --listen-grad: linear-gradient(135deg, var(--listen-1) 0%, var(--listen-2) 100%);
-  --speak-1: #a855f7;
-  --speak-2: #ec4899;
+  --speak-1: #22c55e;
+  --speak-2: #15803d;
   --speak-grad: linear-gradient(135deg, var(--speak-1) 0%, var(--speak-2) 100%);
   --ink: #20202b;
   --muted: #6b6f80;
@@ -318,7 +320,7 @@ button:active { transform: scale(0.97); opacity: 0.92; }
   50% { transform: scale(1.05); }
 }
 
-/* 듣는 중 — 마이크 입력 진폭에 반응(파랑/청록) */
+/* 듣는 중 — 마이크 입력 진폭에 반응(빨강, 녹음 연상) */
 .voice-orb.active .voice-orb-core {
   background:
     radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 40%),
@@ -326,18 +328,18 @@ button:active { transform: scale(0.97); opacity: 0.92; }
 }
 .voice-orb.active .voice-orb-swirl {
   background: conic-gradient(from 0deg,
-    rgba(20, 184, 166, 0.6), rgba(56, 189, 248, 0.6),
-    rgba(20, 184, 166, 0.1), rgba(56, 189, 248, 0.6), rgba(20, 184, 166, 0.6));
+    rgba(239, 68, 68, 0.6), rgba(185, 28, 28, 0.6),
+    rgba(239, 68, 68, 0.1), rgba(185, 28, 28, 0.6), rgba(239, 68, 68, 0.6));
   opacity: 0.6;
   animation-duration: 4s;
 }
 .voice-orb.active .voice-orb-ring {
   opacity: 1;
-  border-color: rgba(20, 184, 166, 0.35);
+  border-color: rgba(239, 68, 68, 0.35);
   animation: orbRing 1.8s infinite ease-out;
 }
 
-/* 말하는 중 — TTS 출력 진폭에 반응(보라/핑크) */
+/* 말하는 중 — TTS 출력 진폭에 반응(초록, 응답) */
 .voice-orb.speaking .voice-orb-core {
   background:
     radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 40%),
@@ -345,14 +347,14 @@ button:active { transform: scale(0.97); opacity: 0.92; }
 }
 .voice-orb.speaking .voice-orb-swirl {
   background: conic-gradient(from 0deg,
-    rgba(168, 85, 247, 0.6), rgba(236, 72, 153, 0.6),
-    rgba(168, 85, 247, 0.1), rgba(236, 72, 153, 0.6), rgba(168, 85, 247, 0.6));
+    rgba(34, 197, 94, 0.6), rgba(21, 128, 61, 0.6),
+    rgba(34, 197, 94, 0.1), rgba(21, 128, 61, 0.6), rgba(34, 197, 94, 0.6));
   opacity: 0.7;
   animation-duration: 2.5s;
 }
 .voice-orb.speaking .voice-orb-ring {
   opacity: 1;
-  border-color: rgba(236, 72, 153, 0.35);
+  border-color: rgba(34, 197, 94, 0.35);
   animation: orbRing 1.4s infinite ease-out;
 }
 
@@ -398,41 +400,34 @@ button:active { transform: scale(0.97); opacity: 0.92; }
 .wave-icon span:nth-child(3) { height: 70%; }
 .wave-icon span:nth-child(4) { height: 30%; }
 
-/* ── 음성 모드 전체화면 오버레이 — 채팅 입력줄에서 파형 버튼으로 진입,
-   X로 나가는 ChatGPT/Gemini 스타일 몰입형 화면. 부드러운 확대+페이드 전환. ── */
-.voice-overlay {
-  position: fixed;
-  inset: 0;
-  background: radial-gradient(circle at 50% 38%, #1c1b2e 0%, #0c0b14 70%);
-  display: flex;
+/* ── 음성 모드 패널 — 전체화면으로 가리지 않고, 입력줄 자리에 오브만 인라인으로
+   나타난다. 채팅 내용(말풍선)은 항상 그대로 보여 글로 읽는 사용자(청각장애인
+   등)도 대화를 따라갈 수 있게 한다. 파형 버튼으로 들어오고 X로 나간다. ── */
+.voice-panel {
+  display: none;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: 10px;
+  padding: 6px 0 2px;
   opacity: 0;
-  visibility: hidden;
-  transform: scale(0.96);
-  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-              transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-              visibility 0.35s;
-  z-index: 50;
+  transform: translateY(6px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
-.voice-overlay.open {
+.voice-panel.open {
+  display: flex;
   opacity: 1;
-  visibility: visible;
-  transform: scale(1);
+  transform: translateY(0);
 }
-.voice-overlay .voice-stage { gap: 22px; }
-.voice-overlay .voice-orb { width: 168px; height: 168px; }
-.voice-overlay .mic-label { color: rgba(255, 255, 255, 0.75); font-size: 15px; }
+.voice-panel .voice-stage { gap: 8px; }
+.voice-panel .voice-orb { width: 84px; height: 84px; }
+.voice-panel .mic-label { font-size: 13px; }
 .voice-close-btn {
-  position: absolute;
-  top: calc(20px + env(safe-area-inset-top));
-  right: 20px;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
-  color: white;
-  font-size: 16px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 14px;
   padding: 0;
   display: flex;
   align-items: center;

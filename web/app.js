@@ -15,7 +15,8 @@ const sendBtn = document.getElementById('send-btn');
 const typingIndicator = document.getElementById('typing-indicator');
 const voiceModeBtn = document.getElementById('voice-mode-btn');
 const voiceCloseBtn = document.getElementById('voice-close-btn');
-const voiceOverlay = document.getElementById('voice-overlay');
+const voicePanel = document.getElementById('voice-panel');
+const textInputRow = document.getElementById('text-input-row');
 
 // 탭(대화/프로필/관리자)
 const tabButtons = document.querySelectorAll('.tab-btn');
@@ -372,12 +373,16 @@ async function initVAD() {
   }
 }
 
-// 채팅 입력줄의 파형 버튼으로 들어오는, ChatGPT/Gemini 스타일 전체화면 음성 모드.
+// 채팅 입력줄의 파형 버튼으로 들어오는 음성 모드. 전체화면으로 가리지 않고
+// 입력줄 자리에 오브만 인라인으로 나타난다 — 채팅 내용(말풍선)은 항상 그대로
+// 보여 글로 읽는 사용자(청각장애인 등)도 대화를 따라갈 수 있게 한다.
 function openVoiceOverlay() {
-  voiceOverlay.classList.add('open');
+  textInputRow.style.display = 'none';
+  voicePanel.classList.add('open');
 }
 function closeVoiceOverlay() {
-  voiceOverlay.classList.remove('open');
+  voicePanel.classList.remove('open');
+  textInputRow.style.display = 'flex';
 }
 
 async function enterVoiceMode() {

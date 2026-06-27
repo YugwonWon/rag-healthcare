@@ -965,13 +965,25 @@ async def get_routine_status(nickname: str):
     }
 
 
+class _NoCacheStaticFiles(StaticFiles):
+    """모바일 브라우저가 style.css/app.js를 오래 캐싱해 재배포 후에도 옛 버전이
+    보이는 문제(2026-06 관찰: 새 HTML은 받았는데 CSS는 한 버전 전 것이 보임)를
+    막기 위해, 매 응답에 no-cache(검증 후 사용)를 강제한다. 활발히 자주 바뀌는
+    실험적 프론트라 캐시 효율보다 항상 최신판이 보이는 것이 더 중요하다."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 # 신규 저지연 프론트(/doctor) 정적 서빙 — same-origin이라 CORS/이중 홉 없음.
 # "/chat"은 기존 POST /chat API와 겹쳐서 쓸 수 없어 "/doctor"로 마운트
 # (브랜드명 "건강박사챗봇"에서 따옴). 모든 API 라우트 정의 뒤에 마운트
 # (경로가 겹치지 않아 순서 자체는 안전하지만, 명시적으로 라우트들과 분리해 둔다).
 _web_dir = _Path(__file__).resolve().parent.parent / "web"
 if _web_dir.is_dir():
-    app.mount("/doctor", StaticFiles(directory=str(_web_dir), html=True), name="doctor")
+    app.mount("/doctor", _NoCacheStaticFiles(directory=str(_web_dir), html=True), name="doctor")
 
 
 if __name__ == "__main__":
