@@ -132,6 +132,23 @@ button:active { transform: scale(0.97); opacity: 0.92; }
   padding: 8px 0;
 }
 .consent-row input { width: auto; }
+.consent-info { font-size: 12px; color: var(--muted); margin: -6px 0 4px; }
+
+.irb-notice {
+  background: var(--surface);
+  border-left: 4px solid var(--primary-1);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #444;
+}
+.irb-notice h3 { font-size: 15px; margin: 0 0 8px; color: var(--ink); }
+.irb-notice p { margin: 0 0 8px; }
+.irb-notice ul { margin: 0 0 8px; padding-left: 18px; }
+.irb-notice li { margin-bottom: 4px; }
+.irb-notice .irb-warning { color: #92400e; background: #fef3c7; border-radius: 8px; padding: 8px 10px; margin-bottom: 0; }
 
 .form-status { font-size: 13px; color: var(--muted); min-height: 18px; }
 

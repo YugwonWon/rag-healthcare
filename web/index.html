@@ -64,14 +64,27 @@
 
     <div id="tab-profile" class="tab-panel">
       <h2>프로필 설정</h2>
+
+      <div class="irb-notice">
+        <h3>📋 연구 참여 안내(IRB 승인 연구)</h3>
+        <p>본 챗봇은 <strong>고령자 건강관리 지원을 위한 연구</strong> 목적으로 운영됩니다.</p>
+        <ul>
+          <li><strong>연구기관</strong>: (IRB 수정심의 진행 중)</li>
+          <li><strong>목적</strong>: 고령자 맞춤형 건강 정보 제공 챗봇의 효과성 검증</li>
+          <li><strong>안내</strong>: 본 챗봇은 연구 목적의 데모용으로 제작되었습니다. <strong>의료적 진단, 약물 투약 관리, 개인화된 의료 처치를 제공하지 않습니다.</strong> 건강 관련 전문적인 상담은 반드시 의료 전문가와 상의하시기 바랍니다.</li>
+        </ul>
+        <p class="irb-warning">⚠️ 아래 "건강정보 개인화 활용 동의"에 체크하시면, 입력하신 건강 상태와 특이사항이 대화 시 맞춤형 응답에 활용됩니다. 동의하지 않으셔도 챗봇 이용에는 제한이 없습니다.</p>
+      </div>
+
       <label class="field-label">이름</label>
       <input id="profile-name" type="text" />
       <label class="field-label">나이</label>
       <input id="profile-age" type="number" min="0" max="120" />
       <label class="consent-row">
         <input id="profile-consent" type="checkbox" />
-        건강정보 개인화 활용에 동의합니다
+        ✅ 건강정보 개인화 활용에 동의합니다(선택사항)
       </label>
+      <p class="consent-info">동의 시 건강 상태/질환, 특이사항이 대화에 반영됩니다. 동의하지 않아도 서비스 이용이 가능합니다.</p>
       <label class="field-label">질환·건강상태</label>
       <textarea id="profile-conditions" rows="2"></textarea>
       <label class="field-label">비상연락처</label>

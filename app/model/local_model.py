@@ -97,7 +97,10 @@ class OllamaClient:
                 # 답 하나만 하면 될 자리에서 가상의 다음 턴들을 계속 만들어내는
                 # 경우가 관찰됨. 한국어 라벨뿐 아니라 ChatML 영어 role 라벨
                 # (user/assistant)로도 새는 케이스가 있어 같이 차단한다.
-                "사용자:", "AI:", "이용자:", "건강상담사:",
+                # "어르신:"도 추가(2026-06) — 우리 프롬프트가 모델에게 호칭으로
+                # "어르신"을 쓰라고 지시하다 보니, 모델이 그 단어를 역할 라벨로도
+                # 써서 "어르신: <가상 발화>" 형태로 새는 사례가 실제 대화에서 확인됨.
+                "사용자:", "AI:", "이용자:", "건강상담사:", "어르신:",
                 "\nuser", "\nassistant", "\nsystem",
             ],
         }
@@ -220,7 +223,15 @@ class OllamaClient:
         # 2d) 가상 멀티턴 라벨 잔재 제거 — stop 시퀀스가 보통 막지만, 그 직전까지
         # 생성된 라벨 단독 줄("user", "사용자:" 등)이 끝에 남는 경우의 2차 안전망.
         content = re.sub(r"\n\s*(?:user|assistant|system)\s*$", "", content, flags=re.IGNORECASE)
-        content = re.sub(r"\n\s*(?:사용자|AI|이용자|건강상담사)\s*[:：]?\s*$", "", content)
+        content = re.sub(r"\n\s*(?:사용자|AI|이용자|건강상담사|어르신)\s*[:：]?\s*$", "", content)
+
+        # 2e) <NAME> 플레이스홀더 제거 — 학습 데이터의 개인정보 마스킹 토큰이
+        # 그대로 새어 나와 "<NAME>(김광석)의" 같은 형태로 출력되는 경우가 실제
+        # 대화에서 관찰됨(2026-06). "<NAME>(실제이름)"은 실제이름만 남기고,
+        # 괄호 없는 단독 <NAME>은 통째로 제거한다. 방치하면 사람 이름이 들어간
+        # 문장이 TTS로 제대로 안 읽히는 2차 문제도 같이 생김.
+        content = re.sub(r"<NAME>\s*\(([^)]*)\)", r"\1", content, flags=re.IGNORECASE)
+        content = re.sub(r"<NAME>\s*", "", content, flags=re.IGNORECASE)  # 단독 <NAME> 제거(뒤 공백도 같이)
 
         # 3) 앞뒤 불필요한 문자 정리 (`:`, `[-1]` 등)
         content = content.strip()
