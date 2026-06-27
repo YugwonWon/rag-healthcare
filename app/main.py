@@ -256,11 +256,14 @@ app.add_middleware(
 # URL은 이미 누구나 접근 가능하고 이 키는 "봇 차단" 수준의 약한 게이트라 새
 # 경로만 면제한다 — /chat·/voice-chat·/admin/* 등 기존 경로의 게이트는 그대로
 # 유지되어 기존 Gradio 트래픽 보호에는 영향 없음.
+# (참고: 정상적인 WS 업그레이드는 scope type이 websocket이라 이 HTTP 미들웨어를
+# 안 타지만, 중간 프록시가 Upgrade 헤더를 빼먹으면 일반 HTTP로 떨어져 이 게이트에
+# 걸릴 수 있다 — /ws도 명시해 방어적으로 막는다.)
 @app.middleware("http")
 async def client_api_key_gate(request: Request, call_next):
     if settings.CLIENT_API_KEY:
         path = request.url.path
-        if path not in ("/health", "/") and not path.startswith("/ui"):
+        if path not in ("/health", "/") and not path.startswith("/ui") and not path.startswith("/ws"):
             key = request.headers.get("X-API-Key", "")
             if key != settings.CLIENT_API_KEY:
                 from fastapi.responses import JSONResponse
