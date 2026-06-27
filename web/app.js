@@ -61,15 +61,21 @@ let isPlaying = false;
 let currentAiBubble = null;
 
 // ── 음성 오브 실시간 진폭 — ChatGPT/Gemini 음성모드 느낌의 원형 비주얼.
-// VAD 내부 스트림을 건드리지 않고, 시각화 전용으로 별도 getUserMedia 스트림을
-// 하나 더 열어 분석한다(VAD 로직과 완전히 분리해 회귀 위험을 낮춤).
+// 핵심 설계 원칙(2026-06 모바일 Safari 디버깅 후 재설계):
+//  1) 소리 경로와 시각화 경로를 완전히 분리한다. 소리는 항상 <audio>로 직접
+//     재생(어떤 경우에도 보장), 시각화는 best-effort로 별도 계산.
+//  2) 마이크 분석 노드는 gain=0을 거쳐 destination에 연결한다 — Safari/WebKit은
+//     destination으로 가는 경로가 없는 AnalyserNode의 데이터를 갱신하지 않는
+//     버그가 있어(Chrome은 갱신) 모바일에서 오브가 마이크에 반응하지 않았다.
+//     gain=0이라 하울링 없이 무음으로 분석만 돌아간다.
 let audioCtx = null;
 let micStream = null; // VAD가 getStream으로 얻은 마이크 스트림 — 오브 분석도 이걸 재사용한다.
 let micAnalyser = null;
 let micAnalyserData = null;
-let playbackAnalyser = null;
-let playbackAnalyserData = null;
 let orbRAF = null;
+let orbLevel = 0;           // 현재 진폭(0~1) — CSS 폴백·WebGL 오브가 함께 읽는다.
+let currentAudio = null;    // 재생 중인 <audio>
+let speakingEnv = null;     // { env: Float32Array(윈도별 RMS), step: 초/윈도 }
 
 async function ensureAudioContext() {
   if (!audioCtx) {
@@ -91,48 +97,66 @@ async function setupMicAnalyser() {
     const ctx = await ensureAudioContext();
     const source = ctx.createMediaStreamSource(micStream);
     micAnalyser = ctx.createAnalyser();
-    micAnalyser.fftSize = 256;
-    micAnalyserData = new Uint8Array(micAnalyser.frequencyBinCount);
+    micAnalyser.fftSize = 512;
+    micAnalyserData = new Uint8Array(micAnalyser.fftSize);
     source.connect(micAnalyser);
+    // Safari가 analyser를 갱신하도록 destination까지 경로를 만들되 gain=0으로 무음.
+    const zero = ctx.createGain();
+    zero.gain.value = 0;
+    micAnalyser.connect(zero);
+    zero.connect(ctx.destination);
   } catch (e) {
     console.warn('[orb] 마이크 진폭 분석 설정 실패(오브는 애니메이션만 동작)', e);
   }
 }
 
-function attachPlaybackAnalyser(audioEl) {
-  if (!audioCtx) return;
-  try {
-    const source = audioCtx.createMediaElementSource(audioEl);
-    playbackAnalyser = audioCtx.createAnalyser();
-    playbackAnalyser.fftSize = 256;
-    playbackAnalyserData = new Uint8Array(playbackAnalyser.frequencyBinCount);
-    source.connect(playbackAnalyser);
-    playbackAnalyser.connect(audioCtx.destination); // 분석 후 실제 출력으로 이어줘야 소리가 남
-  } catch (e) {
-    console.warn('[orb] 재생 진폭 분석 연결 실패(소리는 정상 재생됨)', e);
+// TTS 클립(WAV ArrayBuffer)을 디코딩해 윈도별 RMS 엔벨로프를 만든다. 소리 재생과
+// 무관하게(별도 경로) 계산되므로, 이 디코딩이 실패해도 소리는 정상 재생된다.
+async function computeEnvelope(arrayBuffer) {
+  const ctx = await ensureAudioContext();
+  const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+  const data = decoded.getChannelData(0);
+  const stepSec = 1 / 30; // 30 windows/sec
+  const winLen = Math.max(1, Math.floor(decoded.sampleRate * stepSec));
+  const env = new Float32Array(Math.ceil(data.length / winLen));
+  for (let i = 0, w = 0; i < data.length; i += winLen, w++) {
+    let sum = 0, n = 0;
+    for (let j = i; j < i + winLen && j < data.length; j++, n++) sum += data[j] * data[j];
+    env[w] = Math.sqrt(sum / Math.max(1, n));
   }
+  return { env, step: stepSec };
 }
 
-function getRmsLevel(analyser, data) {
-  analyser.getByteTimeDomainData(data);
-  let sumSquares = 0;
-  for (let i = 0; i < data.length; i++) {
-    const v = (data[i] - 128) / 128;
-    sumSquares += v * v;
+function getMicRms() {
+  if (!micAnalyser) return 0;
+  micAnalyser.getByteTimeDomainData(micAnalyserData);
+  let sum = 0;
+  for (let i = 0; i < micAnalyserData.length; i++) {
+    const v = (micAnalyserData[i] - 128) / 128;
+    sum += v * v;
   }
-  return Math.sqrt(sumSquares / data.length);
+  return Math.sqrt(sum / micAnalyserData.length);
 }
 
 function startOrbLoop() {
   if (orbRAF) return;
   const tick = () => {
     let level = 0;
-    if (micBtn.classList.contains('speaking') && playbackAnalyser) {
-      level = getRmsLevel(playbackAnalyser, playbackAnalyserData);
-    } else if (micBtn.classList.contains('active') && micAnalyser) {
-      level = getRmsLevel(micAnalyser, micAnalyserData);
+    if (micBtn.classList.contains('speaking')) {
+      if (speakingEnv && currentAudio) {
+        const idx = Math.floor(currentAudio.currentTime / speakingEnv.step);
+        level = speakingEnv.env[Math.min(idx, speakingEnv.env.length - 1)] || 0;
+      } else {
+        // 엔벨로프가 아직 준비 안 됐으면 부드러운 합성 펄스로 대체.
+        level = 0.22 + 0.14 * Math.abs(Math.sin(performance.now() / 200));
+      }
+    } else if (micBtn.classList.contains('active')) {
+      level = getMicRms();
     }
-    micBtn.style.setProperty('--level', Math.min(1, level * 4).toFixed(3));
+    // 살짝 부드럽게(감쇠) — 갑작스런 튐 방지.
+    const target = Math.min(1, level * 4);
+    orbLevel += (target - orbLevel) * 0.35;
+    micBtn.style.setProperty('--level', orbLevel.toFixed(3));
     orbRAF = requestAnimationFrame(tick);
   };
   orbRAF = requestAnimationFrame(tick);
@@ -141,6 +165,7 @@ function startOrbLoop() {
 function stopOrbLoopIfIdle() {
   if (micBtn.classList.contains('active') || micBtn.classList.contains('speaking')) return;
   if (orbRAF) { cancelAnimationFrame(orbRAF); orbRAF = null; }
+  orbLevel = 0;
   micBtn.style.setProperty('--level', 0);
 }
 
@@ -245,28 +270,25 @@ function enqueueAudio(buf) {
   playNextInQueue();
 }
 
-async function playNextInQueue() {
+function playNextInQueue() {
   if (isPlaying || audioQueue.length === 0) return;
   isPlaying = true;
   const buf = audioQueue.shift();
   const blob = new Blob([buf], { type: 'audio/wav' });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
+  currentAudio = audio;
+  speakingEnv = null;
   if (vad) { try { vad.pause(); } catch (_) {} }
-  setStatus('🔊 답변 재생 중… (마이크 일시정지)');
+  setStatus('🔊 답변 재생 중…');
   micBtn.classList.add('speaking');
+  startOrbLoop();
 
-  // 모바일에서 AudioContext가 다시 suspended로 빠지면, 분석용으로 그래프에
-  // 연결된 <audio>가 무음이 되는 문제가 있었다(모바일에서 음성이 안 들리는
-  // 버그, 2026-06). 재생마다 미리 resume을 시도하고, 그래도 running이 아니면
-  // 분석 연결 자체를 건너뛰어 일반 재생(소리는 반드시 남)으로 폴백한다.
-  await ensureAudioContext();
-  if (audioCtx && audioCtx.state === 'running') {
-    attachPlaybackAnalyser(audio);
-    startOrbLoop();
-  } else {
-    console.warn('[orb] AudioContext 상태가 running이 아님(' + (audioCtx && audioCtx.state) + ') — 이번 클립은 분석 없이 일반 재생');
-  }
+  // 진폭 엔벨로프는 소리 경로와 독립적으로 계산한다 — 소리는 무조건 아래 <audio>로
+  // 직접 재생되므로(그래프에 묶지 않음) 디코딩 실패해도 소리에는 영향 없다.
+  computeEnvelope(buf)
+    .then((e) => { if (currentAudio === audio) speakingEnv = e; })
+    .catch((err) => console.warn('[orb] 엔벨로프 계산 실패(오브만 영향)', err));
 
   const cleanup = () => {
     URL.revokeObjectURL(url);
@@ -274,6 +296,7 @@ async function playNextInQueue() {
     if (audioQueue.length > 0) {
       playNextInQueue();
     } else {
+      currentAudio = null;
       resumeAfterPlayback();
     }
   };
@@ -385,11 +408,37 @@ function closeVoiceOverlay() {
   textInputRow.style.display = 'flex';
 }
 
+// 음성 모드 시작 효과음 — 짧은 상승 톤(오디오 파일 없이 오실레이터로 생성).
+function playStartChime() {
+  if (!audioCtx) return;
+  try {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    const t = audioCtx.currentTime;
+    o.type = 'sine';
+    o.frequency.setValueAtTime(620, t);
+    o.frequency.exponentialRampToValueAtTime(960, t + 0.13);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.13, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t + 0.24);
+  } catch (_) {}
+}
+
+// 햅틱(진동) — Android Chrome은 navigator.vibrate 지원, iOS Safari는 미지원이라
+// 아이폰에선 조용히 무시된다(웹에서 iOS 진동은 불가).
+function haptic(pattern) {
+  try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (_) {}
+}
+
 async function enterVoiceMode() {
   openVoiceOverlay();
   setStatus('🎤 마이크 준비 중…');
   try {
     await ensureAudioContext(); // 사용자 클릭(제스처) 시점에 생성/resume — 이후 TTS 재생도 이 컨텍스트를 씀
+    playStartChime();
+    haptic(30);
     await initVAD();
     // getStream은 new() 시점이 아니라 start()가 실제로 마이크를 잡을 때 호출되는
     // 듯하다(이 순서가 아니면 micStream이 아직 비어 있어 듣는중 오브가 진폭에
