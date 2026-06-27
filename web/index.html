@@ -2,14 +2,14 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>건강박사챗봇</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>건강박사 챗봇</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="start-screen" class="screen">
-    <h1>건강박사챗봇</h1>
-    <p class="hint">저지연 실험용 화면입니다. 닉네임만 입력하면 시작해요.</p>
+    <h1>건강박사 챗봇</h1>
+    <p class="intro">건강문제에 상담하고 정보를 제공해주는 건강박사 챗봇을 만날 수가 있습니다. 이 챗봇은 인지장애가 있는 어르신을 포함해서 노인들의 건강 상담과 관리를 목적으로 현재 개발중입니다. 아직까지 완벽하지는 않지만 그래도 다른 챗봇과는 달리 이용자들의 속도에 맞게 천천히 답변하고 이용자들이 자신의 건강을 스스로 돌볼 수 있도록 돕는 역할을 하고 있습니다.</p>
     <input id="nickname" type="text" placeholder="닉네임을 입력하세요" />
     <button id="start-btn">시작하기</button>
   </div>
@@ -23,9 +23,16 @@
 
     <div id="tab-chat" class="tab-panel active">
       <div id="status" class="status">대기 중</div>
-      <div id="chat" class="chat"></div>
+      <div id="chat" class="chat">
+        <div id="typing-indicator" class="typing-indicator" style="display:none;">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
       <div class="controls">
-        <button id="mic-btn" class="mic-btn">🎤 음성 대화 시작</button>
+        <button id="mic-btn" class="mic-btn">
+          <span class="mic-pulse"></span>
+          <span class="mic-label">🎤 음성 대화 시작</span>
+        </button>
         <div class="text-row">
           <input id="text-input" type="text" placeholder="또는 텍스트로 입력하세요" />
           <button id="send-btn">보내기</button>

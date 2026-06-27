@@ -884,7 +884,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
             gr.HTML(
                 f'<div style="text-align:center;margin:2px 0 8px;">'
                 f'<a href="{BACKEND_URL}/doctor/" target="_blank" rel="noopener" '
-                f'style="font-size:13px;color:#667eea;">⚡ 더 빠른 음성 대화 (베타, 새 창에서 열기)</a></div>'
+                f'style="font-size:13px;color:#667eea;">⚡ 건강박사 챗봇 새 화면 (더 빠른 음성 대화, 새 창에서 열기)</a></div>'
             )
             with gr.Accordion("🎤 또는 눌러서 말하기 (수동)", open=False):
                 voice_input = gr.Audio(

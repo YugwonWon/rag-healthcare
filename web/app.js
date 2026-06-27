@@ -9,8 +9,10 @@ const startScreen = document.getElementById('start-screen');
 const chatScreen = document.getElementById('chat-screen');
 const startBtn = document.getElementById('start-btn');
 const micBtn = document.getElementById('mic-btn');
+const micLabel = micBtn.querySelector('.mic-label');
 const textInput = document.getElementById('text-input');
 const sendBtn = document.getElementById('send-btn');
+const typingIndicator = document.getElementById('typing-indicator');
 
 // 탭(대화/프로필/관리자)
 const tabButtons = document.querySelectorAll('.tab-btn');
@@ -58,16 +60,27 @@ function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+function showTyping() {
+  typingIndicator.style.display = 'flex';
+  chatEl.appendChild(typingIndicator); // 항상 맨 아래로 이동
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function hideTyping() {
+  typingIndicator.style.display = 'none';
+}
+
 function appendBubble(role, text) {
+  hideTyping();
   if (role === 'ai' && currentAiBubble) {
     currentAiBubble.textContent += ' ' + text;
     chatEl.scrollTop = chatEl.scrollHeight;
     return;
   }
   const div = document.createElement('div');
-  div.className = 'bubble ' + role;
+  div.className = 'bubble ' + role + ' fade-in';
   div.textContent = text;
-  chatEl.appendChild(div);
+  chatEl.insertBefore(div, typingIndicator);
   chatEl.scrollTop = chatEl.scrollHeight;
   currentAiBubble = role === 'ai' ? div : null;
 }
@@ -121,14 +134,17 @@ function connectWS() {
     }
     if (msg.type === 'transcript') {
       appendBubble('user', msg.text);
+      showTyping();
     } else if (msg.type === 'text_chunk') {
       appendBubble('ai', msg.text);
     } else if (msg.type === 'done') {
       currentAiBubble = null; // 턴 종료 — 다음 AI 문장은 새 풍선부터
+      hideTyping();
       if (msg.conversation_ended) {
         endRequested = true;
       }
     } else if (msg.type === 'error') {
+      hideTyping();
       setStatus('❌ ' + msg.detail);
       console.error('[ws] error', msg.detail);
     }
@@ -178,7 +194,8 @@ function resumeAfterPlayback() {
     active = false;
     if (vad) { try { vad.pause(); } catch (_) {} }
     setStatus('✅ 대화가 종료되었습니다. 다시 시작하려면 마이크 버튼을 누르세요.');
-    micBtn.textContent = '🎤 음성 대화 시작';
+    micLabel.textContent = '🎤 음성 대화 시작';
+    micBtn.classList.remove('active');
     ignoreVAD = false;
     return;
   }
@@ -248,7 +265,8 @@ async function toggleMic() {
     if (vad) vad.pause();
     active = false;
     setStatus('⏸️ 중지됨 (버튼을 다시 누르면 시작)');
-    micBtn.textContent = '🎤 음성 대화 시작';
+    micLabel.textContent = '🎤 음성 대화 시작';
+    micBtn.classList.remove('active');
     return;
   }
   setStatus('🎤 마이크 준비 중…');
@@ -257,7 +275,8 @@ async function toggleMic() {
     await vad.start();
     active = true;
     setStatus('🎧 듣는 중… (말씀하시면 자동 인식)');
-    micBtn.textContent = '⏹️ 음성 대화 중지';
+    micLabel.textContent = '⏹️ 음성 대화 중지';
+    micBtn.classList.add('active');
   } catch (e) {
     console.error('mic/VAD init error', e);
     setStatus('❌ 마이크/VAD 초기화 실패 — 브라우저 콘솔을 확인하세요');
@@ -268,6 +287,7 @@ function sendText() {
   const text = textInput.value.trim();
   if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
   appendBubble('user', text);
+  showTyping();
   ws.send(JSON.stringify({ type: 'text', text }));
   textInput.value = '';
 }
@@ -430,7 +450,7 @@ async function adminDownloadCsv() {
   }
 }
 
-startBtn.addEventListener('click', () => {
+function startChat() {
   nickname = nicknameInput.value.trim();
   if (!nickname) {
     alert('닉네임을 입력해 주세요.');
@@ -439,6 +459,11 @@ startBtn.addEventListener('click', () => {
   startScreen.style.display = 'none';
   chatScreen.style.display = 'flex';
   connectWS();
+}
+
+startBtn.addEventListener('click', startChat);
+nicknameInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') startChat();
 });
 
 micBtn.addEventListener('click', toggleMic);
