@@ -271,6 +271,14 @@ button:active { transform: scale(0.97); opacity: 0.92; }
   flex-shrink: 0;
 }
 
+/* orb.js의 WebGL 캔버스가 활성화되면(.gl) CSS 오브 내부 레이어는 숨긴다 —
+   캔버스가 모든 시각을 그리므로 중복 표시 방지. WebGL 실패 시 .gl이 안 붙어
+   기존 CSS 오브가 그대로 폴백으로 보인다. */
+.voice-orb.gl .voice-orb-swirl,
+.voice-orb.gl .voice-orb-core,
+.voice-orb.gl .voice-orb-highlight,
+.voice-orb.gl .voice-orb-ring { display: none; }
+
 /* 코어 뒤에서 천천히(대기) 또는 빠르게(듣는중/말하는중) 도는 에너지 스월 —
    가짜 3D감을 주는 핵심 레이어. 코어 가장자리 바깥으로 살짝 비져나와 보인다. */
 .voice-orb-swirl {

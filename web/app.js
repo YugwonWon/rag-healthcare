@@ -156,7 +156,8 @@ function startOrbLoop() {
     // 살짝 부드럽게(감쇠) — 갑작스런 튐 방지.
     const target = Math.min(1, level * 4);
     orbLevel += (target - orbLevel) * 0.35;
-    micBtn.style.setProperty('--level', orbLevel.toFixed(3));
+    micBtn.style.setProperty('--level', orbLevel.toFixed(3)); // CSS 폴백 오브용
+    window.__orbLevel = orbLevel;                              // WebGL 오브(orb.js)용
     orbRAF = requestAnimationFrame(tick);
   };
   orbRAF = requestAnimationFrame(tick);
