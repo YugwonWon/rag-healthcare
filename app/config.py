@@ -163,6 +163,9 @@ class Settings(BaseSettings):
     TTS_DEVICE: str = "auto"               # melo 전용: auto|cpu|mps|cuda
     # melo 엔진은 별도 .venv-tts 사이드카(HTTP)로 동작 (메인 venv와 공존 불가)
     MELO_TTS_URL: str = "http://127.0.0.1:8181/synth"
+    # 음성 답변 길이 상한(자). 길수록 ① 합성 시간↑ ② base64 data URL이 커져
+    # (>2MB) 자동재생 실패 위험. 문장 경계에서 자른다. .env로 재빌드 없이 조정 가능.
+    TTS_MAX_CHARS: int = 240
 
     # Bareun 형태소 분석기 API 키
     BAREUN_API_KEY: Optional[str] = None

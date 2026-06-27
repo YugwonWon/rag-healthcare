@@ -448,13 +448,16 @@ async def speech_to_text(
             pass
 
 
-def _truncate_for_tts(text: str, max_chars: int = 180) -> str:
+def _truncate_for_tts(text: str, max_chars: Optional[int] = None) -> str:
     """음성 답변은 짧아야 듣기 좋고 자동재생도 안정적이다. (대화창엔 전체 표시됨)
 
-    cap=180: 노인 음성 UX는 1~3문장이면 충분하고, 길수록 ① 재생이 길어지고
-    ② base64 data URL 이 커져(>2MB) Gradio Textbox 전달 중 손상→자동재생 실패가
-    관찰됨(2026-06: 2.6MB에서 new Audio가 즉시 ended 발생). 그래서 문장 경계에서
-    짧게 끊어 작은(≲1.4MB) 오디오를 만든다. max_chars 초과 시 마지막 문장 경계에서 자른다."""
+    cap(기본 240, settings.TTS_MAX_CHARS): 노인 음성 UX는 1~3문장+유도질문이면 충분하고,
+    길수록 ① 재생이 길어지고 ② base64 data URL 이 커져(>2MB) Gradio Textbox 전달 중
+    손상→자동재생 실패가 관찰됨(2026-06: 2.6MB에서 new Audio가 즉시 ended 발생).
+    그래서 문장 경계에서 짧게 끊어 작은 오디오를 만든다. 240자(16kHz)≈약 1.4MB로 안정권.
+    max_chars 초과 시 마지막 문장 경계에서 자른다. .env로 재빌드 없이 조정 가능."""
+    if max_chars is None:
+        max_chars = settings.TTS_MAX_CHARS
     text = (text or "").strip()
     if len(text) <= max_chars:
         return text
