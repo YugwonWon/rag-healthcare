@@ -887,7 +887,7 @@ with gr.Blocks(title="치매노인 맞춤형 헬스케어 챗봇", css="#vad_b64
             # 새 탭으로 열어 백엔드와 직접 통신하므로 이 Gradio 서버를 거치지 않는다.
             gr.HTML(
                 f'<div style="text-align:center;margin:2px 0 8px;">'
-                f'<a href="{BACKEND_URL}/ui/" target="_blank" rel="noopener" '
+                f'<a href="{BACKEND_URL}/doctor/" target="_blank" rel="noopener" '
                 f'style="font-size:13px;color:#667eea;">⚡ 더 빠른 음성 대화 (베타, 새 창에서 열기)</a></div>'
             )
             with gr.Accordion("🎤 또는 눌러서 말하기 (수동)", open=False):

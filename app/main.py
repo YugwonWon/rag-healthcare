@@ -253,7 +253,7 @@ app.add_middleware(
 
 # 클라이언트 API 키 게이트 — CLIENT_API_KEY 설정 시 모든 요청 검증.
 # /health 는 워치독·Render 헬스체크를 위해 항상 통과.
-# /ui, /ws/voice-chat 도 면제 — 신규 저지연 프론트는 브라우저가 백엔드를 직접
+# /doctor, /ws/voice-chat 도 면제 — 신규 저지연 프론트는 브라우저가 백엔드를 직접
 # 호출하므로(same-origin) CLIENT_API_KEY를 JS에 노출할 수 없다. 같은 공개 터널
 # URL은 이미 누구나 접근 가능하고 이 키는 "봇 차단" 수준의 약한 게이트라 새
 # 경로만 면제한다 — /chat·/voice-chat·/admin/* 등 기존 경로의 게이트는 그대로
@@ -265,7 +265,7 @@ app.add_middleware(
 async def client_api_key_gate(request: Request, call_next):
     if settings.CLIENT_API_KEY:
         path = request.url.path
-        if path not in ("/health", "/") and not path.startswith("/ui") and not path.startswith("/ws"):
+        if path not in ("/health", "/") and not path.startswith("/doctor") and not path.startswith("/ws"):
             key = request.headers.get("X-API-Key", "")
             if key != settings.CLIENT_API_KEY:
                 from fastapi.responses import JSONResponse
@@ -559,7 +559,7 @@ def _write_bytes_to_tempfile(data: bytes, suffix: str = ".wav") -> str:
 async def ws_voice_chat(websocket: WebSocket, nickname: str):
     """저지연 음성/텍스트 대화 WebSocket.
 
-    신규 same-origin 프론트(`/ui`) 전용 경로 — 브라우저가 백엔드에 직접 연결해
+    신규 same-origin 프론트(`/doctor`) 전용 경로 — 브라우저가 백엔드에 직접 연결해
     기존 Gradio 경로의 이중 홉(브라우저→Gradio서버→ngrok→백엔드)을 없앤다.
     문장이 완성되는 즉시 텍스트+음성을 보내 응답 전체를 기다리지 않아도 된다.
     기존 /chat, /voice-chat, /tts 엔드포인트는 그대로 두며 이 경로는 완전히 추가됨.
@@ -948,12 +948,13 @@ async def get_routine_status(nickname: str):
     }
 
 
-# 신규 저지연 프론트(/ui) 정적 서빙 — same-origin이라 CORS/이중 홉 없음.
-# 모든 API 라우트 정의 뒤에 마운트(경로가 겹치지 않아 순서 자체는 안전하지만,
-# 명시적으로 라우트들과 분리해 둔다). 기존 "/" 라우트(root)와는 별도 경로.
+# 신규 저지연 프론트(/doctor) 정적 서빙 — same-origin이라 CORS/이중 홉 없음.
+# "/chat"은 기존 POST /chat API와 겹쳐서 쓸 수 없어 "/doctor"로 마운트
+# (브랜드명 "건강박사챗봇"에서 따옴). 모든 API 라우트 정의 뒤에 마운트
+# (경로가 겹치지 않아 순서 자체는 안전하지만, 명시적으로 라우트들과 분리해 둔다).
 _web_dir = _Path(__file__).resolve().parent.parent / "web"
 if _web_dir.is_dir():
-    app.mount("/ui", StaticFiles(directory=str(_web_dir), html=True), name="ui")
+    app.mount("/doctor", StaticFiles(directory=str(_web_dir), html=True), name="doctor")
 
 
 if __name__ == "__main__":
