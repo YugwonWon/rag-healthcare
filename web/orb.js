@@ -61,30 +61,32 @@
       '  vec4 m = max(0.6 - vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)), 0.0); m=m*m;',
       '  return 42.0*dot(m*m, vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));',
       '}',
-      'float fbm(vec3 p){ float a=0.5,s=0.0; for(int i=0;i<5;i++){ s+=a*snoise(p); p*=2.0; a*=0.5;} return s; }',
+      // 옥타브를 줄여(3) 잔점(speckle) 대신 크고 부드러운 너울만 남긴다.
+      'float fbm(vec3 p){ float a=0.55,s=0.0; for(int i=0;i<3;i++){ s+=a*snoise(p); p*=1.9; a*=0.5;} return s; }',
       'void main(){',
       '  vec2 uv = (gl_FragCoord.xy - 0.5*u_res)/min(u_res.x,u_res.y); uv*=2.0;',
-      '  float r = length(uv); float t = u_time*0.32; float lvl = clamp(u_level,0.0,1.0);',
-      // 둥근 실루엣 유지(가장자리 노이즈는 작게) — 진폭에 또렷이 반응.
-      '  float radius = 0.60 + 0.02*sin(t*0.7) + 0.13*lvl;',
-      '  float edge = smoothstep(radius+0.02, radius-0.05, r);',
+      '  float r = length(uv); float t = u_time*0.18; float lvl = clamp(u_level,0.0,1.0);',
+      // 둥근 실루엣 유지(가장자리 부드럽게) — 진폭에 또렷이 반응.
+      '  float radius = 0.60 + 0.015*sin(t*0.7) + 0.15*lvl;',
+      '  float edge = smoothstep(radius+0.04, radius-0.06, r);',
       '  float z = sqrt(max(0.0, radius*radius - r*r));',
       '  vec3 nrm = normalize(vec3(uv, z));',
-      // 표면을 따라 흐르는 액체 무늬 — 구 위 좌표(nrm)를 입력으로 두 겹의 fbm을
-      // 시간에 따라 서로 다른 방향으로 흐르게 해 살아있는 일렁임을 만든다.
-      '  vec3 sp = nrm * (1.3 + 0.2*lvl);',
-      '  float f1 = fbm(sp*1.4 + vec3(0.0, 0.0, t));',
-      '  float f2 = fbm(sp*2.6 + vec3(t*0.6, -t*0.45, t*0.2));',
-      '  float surf = 0.5 + 0.5*sin(f1*3.1 + f2*2.2 + t*1.2);',
-      '  vec3 lightDir = normalize(vec3(-0.35, 0.55, 0.72));',
+      // 표면을 따라 천천히 흐르는 너울 — 낮은 주파수 fbm 두 겹을 서로 다른
+      // 방향으로 느리게 흘려 ChatGPT 오브처럼 큰 파도 같은 일렁임을 만든다.
+      // 흐름 자체는 소리와 무관하게 항상 같은 속도로 돈다(크기만 소리에 반응).
+      '  vec3 sp = nrm * 1.0;',
+      '  float f1 = fbm(sp*0.9 + vec3(0.0, 0.0, t*0.6));',
+      '  float f2 = fbm(sp*1.5 + vec3(t*0.3, -t*0.22, t*0.12));',
+      '  float surf = 0.5 + 0.5*sin(f1*2.1 + f2*1.5 + t*0.8);',
+      '  vec3 lightDir = normalize(vec3(-0.25, 0.45, 0.85));',
       '  float diff = clamp(dot(nrm, lightDir), 0.0, 1.0);',
-      '  float fres = pow(1.0 - clamp(z/max(radius,0.001),0.0,1.0), 2.3);',
+      '  float fres = pow(1.0 - clamp(z/max(radius,0.001),0.0,1.0), 2.0);',
       '  vec3 col = mix(u_colA, u_colB, surf);',          // 흐르는 색
-      '  col *= 0.5 + 0.65*pow(diff, 1.2);',              // 구 음영
-      '  col += 0.22*surf*u_colB;',                       // 내부로 흐르는 빛
-      '  col += fres*0.40*u_colB;',                       // 림 글로우
-      '  col += pow(diff, 9.0)*0.7;',                     // 광택 하이라이트
-      '  col += lvl*0.25;',                               // 말할/들을 때 전체 밝아짐
+      // 내부 너울을 또렷이 — 밝기를 surf로 분명하게 출렁이게 한다(일렁임 가시화).
+      '  col *= 0.70 + 0.52*surf;',                       // 밝기 너울(보이는 일렁임)
+      '  col *= 0.92 + 0.12*diff;',                       // 아주 약한 음영(볼록함 완화)
+      '  col += fres*0.28*u_colB;',                       // 부드러운 림 글로우
+      '  col += (1.0 - clamp(r/radius,0.0,1.0))*0.05*u_colA;', // 중심 은은한 발광
       '  gl_FragColor = vec4(col, edge);',
       '}'
     ].join('\n');
@@ -136,9 +138,9 @@
 
     // 상태별 색 — 대기(보라/인디고), 듣는중(빨강), 말하는중(초록).
     const COLORS = {
-      idle:   [[0.42, 0.45, 0.95], [0.62, 0.40, 0.92]],
-      listen: [[0.96, 0.30, 0.30], [0.78, 0.12, 0.12]],
-      speak:  [[0.18, 0.80, 0.42], [0.08, 0.55, 0.30]],
+      idle:   [[0.62, 0.65, 0.98], [0.78, 0.62, 0.97]],
+      listen: [[0.99, 0.55, 0.52], [0.92, 0.38, 0.36]],
+      speak:  [[0.50, 0.88, 0.62], [0.32, 0.75, 0.52]],
     };
     let curA = COLORS.idle[0].slice(), curB = COLORS.idle[1].slice();
 

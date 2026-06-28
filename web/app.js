@@ -97,6 +97,58 @@ let orbRAF = null;
 let orbLevel = 0;       // 현재 진폭(0~1) — CSS 폴백·WebGL 오브가 함께 읽는다.
 let micFrameRms = 0;    // VAD onFrameProcessed가 갱신하는 마이크 진폭
 let micFrameAt = 0;     // 마지막 프레임 수신 시각(ms) — 신선도 판단용
+let speakingEnv = null; // 현재 재생 중 TTS의 RMS 엔벨로프 {rms, hop, max}
+
+// WAV(PCM 16-bit) 바이트에서 RMS 엔벨로프를 직접 계산한다. Web Audio API를
+// 일절 쓰지 않으므로(파싱은 순수 산술) iOS 무음 버그와 무관하다. 재생 중
+// audio.currentTime으로 이 배열을 샘플링해 '말하는중' 오브를 실제 음압대로
+// 움직이게 한다. 지원 못 하는 포맷이면 null을 돌려주고 합성 펄스로 폴백.
+function parseWavEnvelope(buf) {
+  try {
+    const dv = new DataView(buf);
+    if (dv.getUint32(0, false) !== 0x52494646) return null; // 'RIFF'
+    if (dv.getUint32(8, false) !== 0x57415645) return null; // 'WAVE'
+    let off = 12, fmt = null, dataOff = -1, dataLen = 0;
+    while (off + 8 <= dv.byteLength) {
+      const id = dv.getUint32(off, false);
+      const sz = dv.getUint32(off + 4, true);
+      if (id === 0x666d7420) {        // 'fmt '
+        fmt = {
+          format: dv.getUint16(off + 8, true),
+          channels: dv.getUint16(off + 10, true),
+          rate: dv.getUint32(off + 12, true),
+          bits: dv.getUint16(off + 22, true),
+        };
+      } else if (id === 0x64617461) { // 'data'
+        dataOff = off + 8; dataLen = sz; break;
+      }
+      off += 8 + sz + (sz & 1);
+    }
+    if (!fmt || dataOff < 0 || fmt.format !== 1 || fmt.bits !== 16) return null;
+    const ch = fmt.channels || 1;
+    const total = Math.floor(dataLen / 2);            // 16bit 샘플 수(채널 포함)
+    const frames = Math.floor(total / ch);
+    const hopSec = 0.04;                              // 40ms 창
+    const hop = Math.max(1, Math.floor(fmt.rate * hopSec));
+    const nWin = Math.max(1, Math.ceil(frames / hop));
+    const rms = new Float32Array(nWin);
+    let max = 1e-6;
+    for (let w = 0; w < nWin; w++) {
+      let sum = 0, n = 0;
+      const startF = w * hop, endF = Math.min(frames, startF + hop);
+      for (let f = startF; f < endF; f++) {
+        const s = dv.getInt16(dataOff + (f * ch) * 2, true) / 32768;
+        sum += s * s; n++;
+      }
+      const v = n ? Math.sqrt(sum / n) : 0;
+      rms[w] = v;
+      if (v > max) max = v;
+    }
+    return { rms, hop: hopSec, max };
+  } catch (_) {
+    return null;
+  }
+}
 
 async function ensureAudioContext() {
   if (!audioCtx) {
@@ -112,18 +164,29 @@ async function ensureAudioContext() {
 function startOrbLoop() {
   if (orbRAF) return;
   const tick = () => {
-    let level = 0;
+    let target = 0;
     if (micBtn.classList.contains('speaking')) {
-      // 말하는중은 합성 펄스(실제 TTS 진폭은 iOS 무음 버그 때문에 분석 안 함).
-      level = 0.24 + 0.16 * Math.abs(Math.sin(performance.now() / 220));
+      // 말하는중: 재생 중 TTS의 '실제' RMS 엔벨로프를 audio.currentTime으로
+      // 샘플링해 음압대로 출렁이게 한다(Web Audio 미사용 → iOS 무음 버그 무관).
+      if (speakingEnv && ttsAudio && !ttsAudio.paused) {
+        const idx = Math.floor(ttsAudio.currentTime / speakingEnv.hop);
+        const v = speakingEnv.rms[Math.min(idx, speakingEnv.rms.length - 1)] || 0;
+        target = 0.12 + 0.88 * Math.min(1, v / speakingEnv.max);
+      } else {
+        // 청크 사이 짧은 공백 — 엔벨로프 없으면 약한 합성 출렁임으로 메운다.
+        const tt = performance.now() / 1000;
+        const e = 0.5 * Math.sin(tt * 6.3) + 0.3 * Math.sin(tt * 11.7 + 1.3) +
+                  0.2 * Math.sin(tt * 19.1 + 2.7);
+        target = 0.16 + 0.3 * Math.abs(e);
+      }
     } else if (micBtn.classList.contains('active')) {
       // 듣는중: VAD 프레임 RMS가 최근(250ms 내) 들어왔으면 그걸 쓰고, 아니면 0.
       // 위에서 오브 자체의 기본 일렁임(셰이더/CSS)이 항상 돌고 있으므로 0이어도
       // 죽은 듯 보이지 않는다.
-      level = (performance.now() - micFrameAt < 250) ? micFrameRms * 6 : 0;
+      const level = (performance.now() - micFrameAt < 250) ? micFrameRms * 6 : 0;
+      target = Math.min(1, level * 4);
     }
     // 살짝 부드럽게(감쇠) — 갑작스런 튐 방지.
-    const target = Math.min(1, level * 4);
     orbLevel += (target - orbLevel) * 0.35;
     micBtn.style.setProperty('--level', orbLevel.toFixed(3)); // CSS 폴백 오브용
     window.__orbLevel = orbLevel;                              // WebGL 오브(orb.js)용
@@ -250,6 +313,7 @@ function playNextInQueue() {
   if (isPlaying || audioQueue.length === 0) return;
   isPlaying = true;
   const buf = audioQueue.shift();
+  speakingEnv = parseWavEnvelope(buf); // 실제 음압 엔벨로프(Web Audio 안 씀)
   const blob = new Blob([buf], { type: 'audio/wav' });
   const url = URL.createObjectURL(blob);
   const audio = getTtsAudio();
@@ -261,6 +325,7 @@ function playNextInQueue() {
   const cleanup = (reason) => {
     if (reason) console.log('[audio] cleanup: ' + reason);
     URL.revokeObjectURL(url);
+    speakingEnv = null;
     audio.onended = null; audio.onerror = null; // 재사용 엘리먼트라 리스너를 매번 정리
     isPlaying = false;
     if (audioQueue.length > 0) {

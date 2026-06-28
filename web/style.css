@@ -6,11 +6,11 @@
   --primary-grad: linear-gradient(135deg, var(--primary-1) 0%, var(--primary-2) 100%);
   /* 듣는 중=빨강(녹음 연상), 말하는 중=초록(응답) — 카메라 앱의 녹화 표시와
      같은 색 관습을 따른다. */
-  --listen-1: #ef4444;
-  --listen-2: #b91c1c;
+  --listen-1: #f87171;
+  --listen-2: #ef4444;
   --listen-grad: linear-gradient(135deg, var(--listen-1) 0%, var(--listen-2) 100%);
-  --speak-1: #22c55e;
-  --speak-2: #15803d;
+  --speak-1: #4ade80;
+  --speak-2: #22c55e;
   --speak-grad: linear-gradient(135deg, var(--speak-1) 0%, var(--speak-2) 100%);
   --ink: #20202b;
   --muted: #6b6f80;
