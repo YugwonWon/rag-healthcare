@@ -53,7 +53,7 @@ def _transcribe_sidecar(audio_path: str, language: str) -> str:
     try:
         with open(audio_path, "rb") as f:
             files = {"audio": (os.path.basename(audio_path), f, "audio/wav")}
-            resp = httpx.post(url, files=files, data={"language": language}, timeout=60.0)
+            resp = httpx.post(url, files=files, data={"language": language}, timeout=settings.STT_TIMEOUT)
         resp.raise_for_status()
     except httpx.ConnectError as e:
         raise RuntimeError(

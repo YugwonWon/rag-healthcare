@@ -601,7 +601,10 @@ async def ws_voice_chat(websocket: WebSocket, nickname: str):
             if msg.get("bytes") is not None:
                 path = _write_bytes_to_tempfile(msg["bytes"])
                 try:
-                    transcript = voice_stt.transcribe(path)
+                    # transcribe()는 동기(blocking) HTTP 호출 — 그대로 await 없이
+                    # 부르면 이벤트 루프를 막아 다른 접속자 WS가 끊긴다. 스레드로 분리.
+                    import asyncio as _asyncio
+                    transcript = await _asyncio.to_thread(voice_stt.transcribe, path)
                 except Exception as e:
                     logger.error(f"WS 음성 전사 오류: {e}", exc_info=True)
                     await websocket.send_json({"type": "error", "detail": f"음성 전사 오류: {e}"})

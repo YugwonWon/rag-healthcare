@@ -128,7 +128,7 @@ def _synth_melo(text: str, speed: float) -> Tuple[bytes, str]:
     import httpx
     url = settings.MELO_TTS_URL
     try:
-        resp = httpx.post(url, json={"text": text, "speed": speed}, timeout=60.0)
+        resp = httpx.post(url, json={"text": text, "speed": speed}, timeout=settings.TTS_TIMEOUT)
         resp.raise_for_status()
     except httpx.ConnectError as e:
         raise RuntimeError(

@@ -151,6 +151,10 @@ class Settings(BaseSettings):
     # STT 사이드카(호스트 mlx-whisper, Metal GPU) — 컨테이너에서 호스트로 접근
     STT_SIDECAR_URL: str = "http://127.0.0.1:8182/transcribe"
     STT_MLX_REPO: str = "mlx-community/whisper-large-v3-turbo"  # GPU라 큰 모델도 빠름
+    # 사이드카 HTTP 타임아웃(초). 단일 GPU에 동시 요청이 몰리면 사이드카 큐가
+    # 길어진다 — 타임아웃이 짧으면 "느림"이 "실패(무음/에러)"가 된다. 수업처럼
+    # 동시 사용이 많은 상황에선 넉넉히 둬서 "느려도 완료"되게 한다.
+    STT_TIMEOUT: float = 180.0
     # TTS (음성 합성) — 엔진별 트레이드오프:
     #   edge: MS Edge 온라인, 한국어 최상·설치 간단(텍스트만 외부 전송)
     #   say : macOS 내장(Yuna), 완전 온디바이스·무설치, 품질 보통  ← 프라이버시 우선이면 이걸로
@@ -163,6 +167,9 @@ class Settings(BaseSettings):
     TTS_DEVICE: str = "auto"               # melo 전용: auto|cpu|mps|cuda
     # melo 엔진은 별도 .venv-tts 사이드카(HTTP)로 동작 (메인 venv와 공존 불가)
     MELO_TTS_URL: str = "http://127.0.0.1:8181/synth"
+    # TTS 사이드카 HTTP 타임아웃(초) — STT_TIMEOUT과 같은 이유로 넉넉히. 문장
+    # 단위로 합성하지만 동시 부하 시 큐 대기가 길어질 수 있다.
+    TTS_TIMEOUT: float = 180.0
     # 음성 답변 길이 상한(자). 길수록 ① 합성 시간↑ ② base64 data URL이 커져
     # (>2MB) 자동재생 실패 위험. 문장 경계에서 자른다. .env로 재빌드 없이 조정 가능.
     TTS_MAX_CHARS: int = 240

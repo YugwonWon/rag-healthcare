@@ -9,6 +9,7 @@ preprocess_node/classify_intent_node/retrieve_node를 직접 호출해 동일한
 (RAGQueryHandler.process_query)로 그대로 위임한다 — 응급 로직을 새로 만들지 않음.
 """
 
+import asyncio
 import re
 from typing import AsyncIterator, Optional
 
@@ -83,7 +84,7 @@ async def stream_voice_turn(nickname: str, message: str) -> AsyncIterator[dict]:
         result = await get_query_handler().process_query(nickname, message)
         response = result.get("response", "")
         if response:
-            audio = _synthesize_safe(voice_tts, response)
+            audio = await _synthesize_safe(voice_tts, response)
             yield {"type": "text_chunk", "text": response, "audio": audio}
         yield {"type": "done", "conversation_ended": result.get("conversation_ended", False)}
         return
@@ -109,14 +110,14 @@ async def stream_voice_turn(nickname: str, message: str) -> AsyncIterator[dict]:
             if not sentence:
                 continue
             full_response_parts.append(sentence)
-            audio = _synthesize_safe(voice_tts, sentence)
+            audio = await _synthesize_safe(voice_tts, sentence)
             yield {"type": "text_chunk", "text": sentence, "audio": audio}
     else:
         # OpenAIModel 등 스트리밍 미지원 백엔드 폴백 — 한 번에 받아 단일 청크로.
         response = await llm.chat(messages)
         if response:
             full_response_parts.append(response)
-            audio = _synthesize_safe(voice_tts, response)
+            audio = await _synthesize_safe(voice_tts, response)
             yield {"type": "text_chunk", "text": response, "audio": audio}
 
     full_response = " ".join(full_response_parts).strip()
@@ -128,10 +129,15 @@ async def stream_voice_turn(nickname: str, message: str) -> AsyncIterator[dict]:
     yield {"type": "done", "conversation_ended": False}
 
 
-def _synthesize_safe(voice_tts_module, text: str) -> Optional[bytes]:
-    """TTS 합성 실패해도 텍스트 청크는 보낼 수 있도록 예외를 흡수한다."""
+async def _synthesize_safe(voice_tts_module, text: str) -> Optional[bytes]:
+    """TTS 합성 실패해도 텍스트 청크는 보낼 수 있도록 예외를 흡수한다.
+
+    synthesize()는 동기(blocking) HTTP 호출이라 그대로 await하면 이벤트 루프를
+    막아 동시 접속자 전원의 WS ping이 끊긴다(부하 시 연결 끊김의 주원인).
+    asyncio.to_thread로 워커 스레드에 떠넘겨 루프를 계속 응답 가능하게 둔다.
+    """
     try:
-        audio, _media_type = voice_tts_module.synthesize(text)
+        audio, _media_type = await asyncio.to_thread(voice_tts_module.synthesize, text)
         return audio
     except Exception as e:  # noqa: BLE001
         logger.error(f"문장 TTS 합성 오류(텍스트만 전달): {e}")
